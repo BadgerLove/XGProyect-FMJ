@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Xgp\App\Core;
 
+// TEMPORARY: Clear OPcache (remove after confirming)
+if (function_exists('opcache_reset')) { opcache_reset(); }
+
 use App\Models\User;
 use App\Services\SettingsService;
 use App\Services\TimingService;

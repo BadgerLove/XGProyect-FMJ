@@ -20,10 +20,12 @@ class LegacyController extends BaseController
      */
     private const PROMOTED_PAGES = [
         'banned' => Game\BannedController::class,
+        'battlesimulator' => Game\BattleSimulatorController::class,
         'changelog' => Game\ChangelogController::class,
         'changenick' => Game\ChangenickController::class,
         'combatreport' => Game\CombatreportController::class,
         'empire' => Game\EmpireController::class,
+        'expeditionguide' => Game\ExpeditionguideController::class,
         'facilities' => Game\FacilitiesController::class,
         'logout' => Game\LogoutController::class,
         'notices' => Game\NoticesController::class,

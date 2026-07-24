@@ -6,7 +6,7 @@
         }
     </script>
     <center>
-        <div id="menu">
+        <div id="leftmenu-inner">
             <p style="width:110px;">
                 <NOBR>
                     {{ __('game/menu.lm_players') }} <strong>{!! $userName !!}</strong>

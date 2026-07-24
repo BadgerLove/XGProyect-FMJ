@@ -16,17 +16,26 @@ final class Messenger
 
     public function sendMessage(MessagesOptions $options): void
     {
+        $prefix = DB::getTablePrefix();
+
         DB::statement(
-            $this->prepareSql(
-                'INSERT INTO `' . MESSAGES . "` SET
-                `message_receiver` = '" . $options->getTo() . "',
-                `message_sender` = '" . $options->getSender() . "',
-                `message_time` = '" . $options->getTime() . "',
-                `message_type` = '" . $options->getType() . "',
-                `message_from` = '" . $options->getFrom() . "',
-                `message_subject` = '" . $options->getSubject() . "',
-                `message_text` 	= '" . $options->getMessageText() . "';"
-            )
+            "INSERT INTO `{$prefix}messages` SET
+                `message_receiver` = ?,
+                `message_sender` = ?,
+                `message_time` = ?,
+                `message_type` = ?,
+                `message_from` = ?,
+                `message_subject` = ?,
+                `message_text` = ?",
+            [
+                $options->getTo(),
+                $options->getSender(),
+                $options->getTime(),
+                $options->getType(),
+                $options->getFrom(),
+                $options->getSubject(),
+                $options->getMessageText(),
+            ]
         );
     }
 }

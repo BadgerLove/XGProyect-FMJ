@@ -175,7 +175,18 @@ class Attack extends Missions
             $this->updatePoints($report, $afterBattleAttackers, $afterBattleDefenders);
             $this->updateDebris($fleet_row, $report);
             $this->updateMoon($fleet_row, $report, $targetUserId);
-            $this->createNewReportAndSendIt($fleet_row, $report, $target_planet['planet_name']);
+            try {
+                $this->createNewReportAndSendIt($fleet_row, $report, $target_planet['planet_name']);
+            } catch (\Exception $e) {
+                \Log::error('createNewReportAndSendIt FAILED: ' . $e->getMessage() . ' at ' . $e->getFile() . ':' . $e->getLine());
+            }
+
+            // Log combat outcome for bot tracking
+            try {
+                app(\App\Services\Bot\CombatLogService::class)->logCombat($fleet_row, $report, $targetUser);
+            } catch (\Exception $e) {
+                \Log::error('CombatLogService FAILED: ' . $e->getMessage() . ' at ' . $e->getFile() . ':' . $e->getLine());
+            }
         } elseif ($fleet_row['fleet_end_time'] <= time()) {
             $message = sprintf(
                 __('game/missions.mi_fleet_back_with_resources'),
@@ -213,6 +224,7 @@ class Attack extends Missions
      */
     private function getShipType($id, $count)
     {
+        $count = (int) $count;
         $rf = isset($this->combat_caps[$id]['sd']) ? $this->combat_caps[$id]['sd'] : 0;
         $shield = $this->combat_caps[$id]['shield'];
         $cost = [$this->pricelist[$id]['metal'], $this->pricelist[$id]['crystal']];
@@ -736,14 +748,14 @@ class Attack extends Missions
     private function buildReportLink($color, $rid, $target_planet_name, $g, $s, $p)
     {
         $style = 'style="color:' . $color . ';"';
-        $js = "OnClick=\'f(\"game.php?page=combatreport&report=" . $rid . "\", \"\");\'";
+        $href = 'game.php?page=combatreport&report=' . $rid;
         $content = sprintf(__('game/attack.at_report_title'), $target_planet_name, $this->formatService->prettyCoords((int)$g, (int)$s, (int)$p));
 
         return app(FormatService::class)->link(
-            '',
+            'game.php?page=combatreport&report=' . $rid,
             $content,
             '',
-            $style . ' ' . $js
+            $style
         );
     }
 

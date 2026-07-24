@@ -445,6 +445,15 @@ class FleetsLib
         $bloc['fleet_javas'] = Functions::chronoApplet($Label, $recordReference, $Rest, false);
         $bloc['fleet_time'] = app(TimingService::class)->formatExtendedDate($Time);
 
+        // Add cancel button for own outbound fleets that haven't arrived yet
+        $bloc['fleet_cancel'] = '';
+        if ($Owner && $Status === 0 && $fleetRow['fleet_mess'] == 0) {
+            $bloc['fleet_cancel'] = '<a href="game.php?page=fleetcancel&fleetid=' . $fleetRow['fleet_id'] . '" '
+                . 'onclick="return confirm(\'Are you sure you want to recall this fleet?\')" '
+                . 'class="cancel_fleet" title="Recall Fleet">'
+                . '&#x2716; Recall</a>';
+        }
+
         return Template::render(
             'overview.fleets',
             $bloc

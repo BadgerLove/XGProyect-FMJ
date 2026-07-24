@@ -27,10 +27,25 @@ return [
     'tr_merchant2_title' => 'Exchange your resources.',
     'tr_step1' => '1. Exchange your resources.',
     'tr_step2' => '2. Call merchant',
-    'tr_price' => 'Costs: %s Dark Matter (per call)',
+    'tr_price' => 'Costs: 3,500 Dark Matter (per call)',
     'tr_call_button' => 'Call merchant',
     'tr_no_enough_storage' => 'Not enough storage capacity.',
     'tr_no_enough_dark_matter' => 'There is not enough dark matter available',
+    'tr_invalid_exchange' => 'Invalid exchange selection.',
+    'tr_same_resource' => 'You cannot exchange a resource for itself.',
+    'tr_no_resource_to_sell' => 'You have nothing to exchange.',
+
+    // Merchant exchange
+    'tr_merchant_title' => 'The Merchant',
+    'tr_merchant_intro' => 'The merchant will exchange your resources for a fee of 3,500 Dark Matter.',
+    'tr_you_have' => 'Available',
+    'tr_exchange_rate' => 'Exchange rate',
+    'tr_dm_cost' => 'Cost',
+    'tr_exchange_for' => 'Exchange for',
+    'tr_amount_to_sell' => 'Amount to trade',
+    'tr_you_receive' => 'You receive',
+    'tr_confirm_trade' => 'Confirm trade',
+    'tr_cancel' => 'Cancel',
 
     // traderAuctioneer
 

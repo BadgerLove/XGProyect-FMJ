@@ -379,6 +379,22 @@ class Fleet3Controller extends BaseController
             }
         }
 
+        // Limit Expedition mission based on Astrophysics level
+        if (in_array(Missions::EXPEDITION, $possible_missions)) {
+            $expeditionsCount = \Illuminate\Support\Facades\DB::table('fleets')
+                ->where('fleet_owner', $this->user['id'])
+                ->where('fleet_mission', Missions::EXPEDITION)
+                ->count();
+
+            $maxExpeditions = $this->fleetsService->getMaxExpeditions(
+                $this->_research->getCurrentResearch()->getResearchAstrophysics()
+            );
+
+            if ($expeditionsCount >= $maxExpeditions) {
+                unset($possible_missions[array_search(Missions::EXPEDITION, $possible_missions)]);
+            }
+        }
+
         if (count($ships) > 0) {
             foreach ($ships as $ship_id => $amount) {
                 if ($amount > 0) {
@@ -435,7 +451,10 @@ class Fleet3Controller extends BaseController
                 'filter' => FILTER_VALIDATE_INT,
                 'options' => ['min_range' => 1, 'max_range' => 10],
             ],
-            'target_mission' => FILTER_VALIDATE_INT,
+            'target_mission' => [
+                'filter' => FILTER_VALIDATE_INT,
+                'options' => ['min_range' => 0],
+            ],
             'fleet_group' => FILTER_VALIDATE_INT,
             'acs_target' => FILTER_UNSAFE_RAW,
         ]);

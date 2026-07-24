@@ -243,7 +243,7 @@ class Fleet4Controller extends BaseController
     private function runValidations()
     {
         $validations = [
-            'admin', 'ownVacations', 'targetVacations', 'acs', 'ships', 'mission', 'noobProtection', 'fleets', 'resources', 'time',
+            'admin', 'ownVacations', 'targetVacations', 'acs', 'ships', 'mission', 'noobProtection', 'fleets', 'expeditions', 'resources', 'time',
         ];
 
         foreach ($validations as $validation) {
@@ -601,6 +601,28 @@ class Fleet4Controller extends BaseController
         if ($max_fleets <= $fleets) {
             $this->showMessage(
                 __('game/fleet.fl_no_slots')
+            );
+        }
+
+        return true;
+    }
+
+    private function validateExpeditions()
+    {
+        if ($this->_fleet_data['fleet_mission'] != Missions::EXPEDITION) {
+            return true;
+        }
+
+        $expeditions = $this->_fleets->getExpeditionsCount();
+        $astrophysics = $this->_research->getCurrentResearch()->getResearchAstrophysics();
+        $max_expeditions = $this->fleetsService->getMaxExpeditions($astrophysics);
+
+        // Discoverer class check could go here if implemented in the future (+2 max expeditions)
+        // Fleet Admiral check could go here if implemented (+1 max expeditions)
+
+        if ($expeditions >= $max_expeditions) {
+            $this->showMessage(
+                __('game/fleet.fl_expedition_fleets_limit')
             );
         }
 

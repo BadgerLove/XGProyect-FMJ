@@ -100,7 +100,10 @@ class Spy extends Missions
                     $AttackLink .= '&planet=' . $fleet_row['fleet_end_planet'] . '&planettype=' . $fleet_row['fleet_end_type'] . '';
                     $AttackLink .= '&target_mission=1';
                     $AttackLink .= ' ">' . __('game/missions.type_mission')[MissionsEnumerator::ATTACK] . '';
-                    $AttackLink .= '</a></center>';
+                    $AttackLink .= '</a>';
+                    $AttackLink .= ' &middot; ';
+                    $AttackLink .= '<a href="' . $this->buildSimulatorUrl($target_data) . '">' . __('game/spy.spy_simulate') . '</a>';
+                    $AttackLink .= '</center>';
                     $MessageEnd = '<center>' . sprintf(__('game/spy.spy_report_detection'), $TargetChances) . '</center>';
 
                     $spionage_difference = abs($CurrentSpyLvl - $TargetSpyLvl);
@@ -193,7 +196,7 @@ class Spy extends Missions
                 $String .= '</td>';
                 $String .= '</tr><tr>';
                 $String .= '<td width=220>' . __('game/global.metal') . '</td><td width=220 align=right>' . $this->formatService->prettyNumber((int) $target_data['planet_metal']) . '</td><td>&nbsp;</td>';
-                $String .= '<td width=220>' . __('game/global.crystal') . '</td></td><td width=220 align=right>' . $this->formatService->prettyNumber((int) $target_data['planet_crystal']) . '</td>';
+                $String .= '<td width=220>' . __('game/global.crystal') . '</td><td width=220 align=right>' . $this->formatService->prettyNumber((int) $target_data['planet_crystal']) . '</td>';
                 $String .= '</tr><tr>';
                 $String .= '<td width=220>' . __('game/global.deuterium') . '</td><td width=220 align=right>' . $this->formatService->prettyNumber((int) $target_data['planet_deuterium']) . '</td><td>&nbsp;</td>';
                 $String .= '<td width=220>' . __('game/global.energy') . '</td><td width=220 align=right>' . $this->formatService->prettyNumber((int) $target_data['planet_energy_max']) . '</td>';
@@ -226,7 +229,7 @@ class Spy extends Missions
         }
 
         if ($LookAtLoop == true) {
-            $String = '<table width="440" cellspacing="1"><tr><td class="c" colspan="' . ((2 * 2) + (2 - 1)) . '">' . $report_title . '</td></tr>';
+            $String = '<table width="440" cellspacing="1"><tr><td class="c" colspan="' . (2 * 2) . '">' . $report_title . '</td></tr>';
             $Count = 0;
             $CurrentLook = 0;
 
@@ -238,7 +241,7 @@ class Spy extends Missions
                             $String .= '<tr>';
                         }
 
-                        $String .= '<td align=left>' . __('game/constructions.' . $this->resource[$Item]) . '</td><td align=right>' . $this->formatService->prettyNumber((int) $target_data[$this->resource[$Item]]) . '</td>';
+                        $String .= '<td align=left>' . $this->getItemName($this->resource[$Item]) . '</td><td align=right>' . $this->formatService->prettyNumber((int) $target_data[$this->resource[$Item]]) . '</td>';
 
                         if ($row < 2 - 1) {
                             $String .= '<td>&nbsp;</td>';
@@ -273,6 +276,51 @@ class Spy extends Missions
         $return['Count'] = $Count;
 
         return $return;
+    }
+
+    private function buildSimulatorUrl(array $target_data): string
+    {
+        $params = ['page' => 'battlesimulator'];
+
+        // Defender ships (200-215)
+        for ($i = 200; $i <= 215; $i++) {
+            if (isset($this->resource[$i]) && ($target_data[$this->resource[$i]] ?? 0) > 0) {
+                $params['def_' . $i] = $target_data[$this->resource[$i]];
+            }
+        }
+
+        // Defenses (400-503)
+        for ($i = 400; $i <= 503; $i++) {
+            if (isset($this->resource[$i]) && ($target_data[$this->resource[$i]] ?? 0) > 0) {
+                $params['defd_' . $i] = $target_data[$this->resource[$i]];
+            }
+        }
+
+        // Research levels
+        foreach (['research_weapons_technology' => 'def_weapons', 'research_shielding_technology' => 'def_shielding', 'research_armour_technology' => 'def_armour'] as $dbKey => $paramKey) {
+            if (($target_data[$dbKey] ?? 0) > 0) {
+                $params[$paramKey] = $target_data[$dbKey];
+            }
+        }
+
+        // Resources for loot estimate
+        $params['def_metal'] = (int) ($target_data['planet_metal'] ?? 0);
+        $params['def_crystal'] = (int) ($target_data['planet_crystal'] ?? 0);
+        $params['def_deuterium'] = (int) ($target_data['planet_deuterium'] ?? 0);
+
+        return 'game.php?' . http_build_query($params);
+    }
+
+    private function getItemName(string $key): string
+    {
+        $prefix = strtok($key, '_');
+
+        return match ($prefix) {
+            'ship' => __('game/ships.' . $key),
+            'defense' => __('game/defenses.' . $key),
+            'research' => __('game/technologies.' . $key),
+            default => __('game/constructions.' . $key),
+        };
     }
 
     private function sendReportToTarget(array $fleet, array $user, array $target, int $chances): void

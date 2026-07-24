@@ -1,0 +1,1350 @@
+/* ============================================
+   MOBILE RESPONSIVE CSS — FMJ oGame
+   Added 2026-07-17
+   
+   This file is purely additive. Media queries
+   only activate on screens ≤768px. Desktop is
+   completely unaffected.
+   ============================================ */
+
+/* ============================================
+   MOBILE MENU TOGGLE JS
+   Hamburger + overlay are in game.blade.php
+   ============================================ */
+
+/* --- HAMBURGER BUTTON (hidden on desktop) --- */
+.hamburger-btn {
+    display: none;
+}
+
+.menu-overlay {
+    display: none;
+}
+
+/* ============================================
+   TABLET AND BELOW (≤768px)
+   ============================================ */
+@media (max-width: 768px) {
+
+    body {
+        font-size: 14px;
+    }
+
+    /* --- LAYOUT: Stack vertically --- */
+    #container {
+        flex-direction: column;
+    }
+
+    /* --- HAMBURGER BUTTON --- */
+    .hamburger-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        position: fixed;
+        top: 8px;
+        left: 8px;
+        z-index: 1001;
+        width: 44px;
+        height: 44px;
+        background: #1a2a40;
+        border: 1px solid #415680;
+        border-radius: 6px;
+        cursor: pointer;
+        flex-direction: column;
+        gap: 5px;
+        padding: 10px;
+    }
+
+    .hamburger-btn span {
+        display: block;
+        width: 22px;
+        height: 2px;
+        background: #E6EBFB;
+        border-radius: 1px;
+        transition: all 0.3s ease;
+    }
+
+    .hamburger-btn.active span:nth-child(1) {
+        transform: rotate(45deg) translate(5px, 5px);
+    }
+
+    .hamburger-btn.active span:nth-child(2) {
+        opacity: 0;
+    }
+
+    .hamburger-btn.active span:nth-child(3) {
+        transform: rotate(-45deg) translate(5px, -5px);
+    }
+
+    /* --- LEFT MENU: Drawer overlay --- */
+    #menu {
+        position: fixed;
+        top: 0;
+        left: -260px;
+        width: 260px;
+        height: 100vh;
+        z-index: 1000;
+        transition: left 0.3s ease;
+        overflow-y: auto;
+        background: #0d1b2a;
+        border-right: 1px solid #415680;
+        padding-top: 60px;
+    }
+
+    #menu.open {
+        left: 0;
+    }
+
+    #leftmenu {
+        padding: 0 10px;
+    }
+
+    #leftmenu p {
+        font-size: 14px;
+    }
+
+    #leftmenu table {
+        width: 100% !important;
+    }
+
+    #leftmenu td {
+        text-align: center;
+    }
+
+    #leftmenu a {
+        font-size: 14px;
+        padding: 6px 0;
+    }
+
+    #leftmenu img {
+        max-width: 100%;
+        height: auto;
+    }
+
+    /* --- MENU OVERLAY --- */
+    .menu-overlay {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0,0,0,0.6);
+        z-index: 999;
+    }
+
+    .menu-overlay.active {
+        display: block;
+    }
+
+    /* --- TOPNAV: Compact resource bar --- */
+    #navbar {
+        padding: 8px 8px 8px 56px;
+        width: 100%;
+    }
+
+    #header_top {
+        width: 100%;
+    }
+
+    #header_top table.header {
+        width: 100%;
+    }
+
+    #header_top td.header {
+        vertical-align: middle;
+        padding: 2px 4px;
+    }
+
+    /* Planet selector row */
+    #header_top tr.header:first-child {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+    }
+
+    #header_top td.header:first-child {
+        flex-shrink: 0;
+    }
+
+    /* Resource table */
+    table#resources {
+        width: 100% !important;
+    }
+
+    table#resources td.header {
+        padding: 2px 3px;
+    }
+
+    table#resources td.header img {
+        width: 28px;
+        height: 15px;
+    }
+
+    table#resources tr.header {
+        display: flex;
+        flex-wrap: wrap;
+    }
+
+    table#resources td.header {
+        min-width: 60px;
+        flex: 1;
+        text-align: center;
+    }
+
+    /* Officers */
+    #header_top td.header img[width="32"] {
+        width: 28px;
+        height: 28px;
+    }
+
+    /* --- CONTENT AREA --- */
+    #content {
+        padding: 8px;
+        width: 100%;
+    }
+
+    #content br:first-child {
+        display: none;
+    }
+
+    /* --- QUEUE ROWS: Full-width label + timer --- */
+    table tr:has(td.l[colspan]) {
+        display: flex;
+        flex-wrap: wrap;
+        border: 1px solid #415680;
+        margin-bottom: 6px;
+        background: #1a2a40;
+        border-radius: 6px;
+        overflow: hidden;
+    }
+
+    table tr:has(td.l[colspan]) td.l {
+        flex: 1;
+        min-width: 0;
+        padding: 8px 12px;
+        font-size: 13px;
+        border: 0;
+        text-align: left;
+    }
+
+    table tr:has(td.l[colspan]) td.k {
+        min-width: 100px;
+        padding: 8px 12px;
+        border: 0;
+        border-left: 1px solid #415680;
+        text-align: center;
+        font-size: 13px;
+    }
+
+    /* --- BUILDING/RESEARCH/SHIPYARD: Card layout --- */
+    /* Building rows: td.l + td.l + td.k */
+    table tr:has(td.l:first-child:not([colspan])):has(td.k:last-child),
+    /* Research/tech rows: th.l + td.l + th.l */
+    table tr:has(th.l:first-child:not([colspan])):has(th.l:last-child),
+    /* Shipyard rows: th.l + td.l + th.k */
+    table tr:has(th.l:first-child:not([colspan])):has(th.k:last-child) {
+        display: flex;
+        flex-wrap: wrap;
+        border: 1px solid #415680;
+        margin-bottom: 8px;
+        background: #1a2a40;
+        border-radius: 6px;
+        overflow: hidden;
+    }
+
+    table tr:has(td.l:first-child:not([colspan])):has(td.k:last-child) td.l:first-child,
+    table tr:has(th.l:first-child:not([colspan])):has(th.l:last-child) th.l:first-child,
+    table tr:has(th.l:first-child:not([colspan])):has(th.k:last-child) th.l:first-child {
+        width: 80px;
+        min-width: 80px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 8px;
+        border: 0;
+        border-right: 1px solid #415680;
+    }
+
+    table tr:has(td.l:first-child:not([colspan])):has(td.k:last-child) td.l:first-child img,
+    table tr:has(th.l:first-child:not([colspan])):has(th.l:last-child) th.l:first-child img,
+    table tr:has(th.l:first-child:not([colspan])):has(th.k:last-child) th.l:first-child img {
+        width: 64px !important;
+        height: 64px !important;
+    }
+
+    table tr:has(td.l:first-child:not([colspan])):has(td.k:last-child) td.l:nth-child(2),
+    table tr:has(th.l:first-child:not([colspan])):has(th.l:last-child) td.l,
+    table tr:has(th.l:first-child:not([colspan])):has(th.k:last-child) td.l {
+        flex: 1;
+        min-width: 0;
+        padding: 8px;
+        border: 0;
+        font-size: 13px;
+    }
+
+    table tr:has(td.l:first-child:not([colspan])):has(td.k:last-child) td.k,
+    table tr:has(th.l:first-child:not([colspan])):has(th.l:last-child) th.l:last-child,
+    table tr:has(th.l:first-child:not([colspan])):has(th.k:last-child) th.k {
+        width: 100%;
+        padding: 8px;
+        border: 0;
+        border-top: 1px solid #415680;
+        text-align: center;
+    }
+
+    /* --- OVERVIEW: Stack vertically --- */
+    /* Only match the overview table (has planet image or scope=row) */
+    table[width="519"]:has(img[height="200"]),
+    table[width="519"]:has(th[scope="row"]) {
+        width: 100% !important;
+    }
+
+    table[width="519"]:has(img[height="200"]) tr,
+    table[width="519"]:has(th[scope="row"]) tr {
+        display: flex;
+        flex-wrap: wrap;
+    }
+
+    table[width="519"]:has(img[height="200"]) td.c,
+    table[width="519"]:has(th[scope="row"]) td.c,
+    table[width="519"]:has(img[height="200"]) th.c,
+    table[width="519"]:has(th[scope="row"]) th.c {
+        flex: 0 0 100%;
+        text-align: center;
+        font-size: 14px;
+        padding: 10px;
+    }
+
+    table[width="519"]:has(img[height="200"]) th[scope="row"],
+    table[width="519"]:has(th[scope="row"]) th[scope="row"] {
+        flex: 0 0 100%;
+        background: #2a3a5c;
+        font-weight: bold;
+        text-align: left;
+        padding: 8px;
+    }
+
+    table[width="519"]:has(img[height="200"]) th[role="cell"],
+    table[width="519"]:has(th[scope="row"]) th[role="cell"] {
+        flex: 1;
+        min-width: 80px;
+        text-align: center;
+        padding: 6px 4px;
+        font-size: 13px;
+    }
+
+    /* Planet image in overview */
+    table[width="519"]:has(img[height="200"]) img[height="200"] {
+        width: 150px !important;
+        height: 150px !important;
+    }
+
+    /* --- FLEET SEND: Width only --- */
+    table[width="519"][border="0"] {
+        width: 100% !important;
+    }
+
+    /* --- FLEET MOVEMENT: Scroll wrapper --- */
+    .fleet-movement-scroll {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        width: 100%;
+    }
+
+    .fleet-movement-scroll table {
+        min-width: 519px;
+        width: 519px;
+    }
+
+    /* --- COMPLEX TABLES: Horizontal scroll --- */
+    /* Highscore stats, galaxy, empire */
+    table[width="656px"],
+    table[width="750px"] {
+        width: 100% !important;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        display: block;
+    }
+
+    /* --- RESOURCE SETTINGS: Horizontal scroll --- */
+    table[width="569"] {
+        width: 100% !important;
+        min-width: 400px;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        display: block;
+    }
+
+    /* --- BUILDINGS TABLE (530px) --- */
+    table[width="530"] {
+        width: 100% !important;
+    }
+
+
+
+    /* --- HIGHSCORE --- */
+    /* Dropdowns in highscore header */
+    table[width="519"] select {
+        font-size: 14px;
+        padding: 6px;
+    }
+
+    /* --- FORMS: Touch-friendly --- */
+    select,
+    input[type="text"],
+    input[type="number"],
+    input[type="password"] {
+        font-size: 16px !important;
+        padding: 8px !important;
+        min-height: 40px;
+    }
+
+    input[type="submit"],
+    input[type="button"],
+    button {
+        font-size: 14px !important;
+        padding: 10px 20px !important;
+        min-height: 44px;
+        min-width: 44px;
+    }
+
+    /* --- QUEUE DISPLAY --- */
+    /* Build queue rows at top of buildings/research */
+    table tr td.c[colspan] {
+        font-size: 13px;
+        padding: 8px;
+    }
+
+
+
+    /* --- IMAGES: Responsive --- */
+    img {
+        max-width: 100%;
+        height: auto;
+    }
+
+    /* Keep building/tech images at fixed size */
+    tr:has(td.l:first-child:not([colspan])):has(td.k:last-child) td.l img[width="120"],
+    tr:has(td.l:first-child:not([colspan])):has(td.k:last-child) td.l img[width="120px"],
+    tr:has(th.l:first-child:not([colspan])):has(th.l:last-child) th.l img[width="120"],
+    tr:has(th.l:first-child:not([colspan])):has(th.l:last-child) th.l img[width="120px"],
+    tr:has(th.l:first-child:not([colspan])):has(th.k:last-child) th.l img[width="120"],
+    tr:has(th.l:first-child:not([colspan])):has(th.k:last-child) th.l img[width="120px"] {
+        width: 64px !important;
+        height: 64px !important;
+    }
+
+    /* --- CHAT / MESSAGES --- */
+    textarea {
+        width: 100% !important;
+        font-size: 14px;
+        min-height: 80px;
+    }
+
+    /* --- NOTICE BAR (top of game) --- */
+    x-notice,
+    .notice-bar {
+        width: 100%;
+    }
+
+    /* --- PREMIUM / OPTIONS --- */
+    /* These are usually simple tables, just let them flex */
+    table td.c {
+        font-size: 14px;
+        padding: 10px;
+    }
+
+    /* --- TECH DETAILS --- */
+    table.s th img {
+        width: 64px !important;
+        height: 64px !important;
+    }
+
+    /* --- SPY / ESPIONAGE REPORTS --- */
+    /* Wrap spy report tables in scroll container */
+    table[width="440"] {
+        width: 100% !important;
+        min-width: 360px;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        display: block;
+    }
+
+    table[width="440"] td {
+        padding: 6px 8px;
+        font-size: 13px;
+    }
+
+    table[width="440"] td.c {
+        font-size: 14px;
+        padding: 10px;
+    }
+
+    /* Attack link in spy report */
+    table[width="440"] a {
+        padding: 8px 16px;
+        display: inline-block;
+    }
+
+    /* ============================================
+       TECHNOLOGY TREE — Compact card layout
+       Each row: image+name left, requirements right
+       ============================================ */
+    table[width="569"] {
+        min-width: 0 !important;
+        display: block;
+    }
+
+    table[width="569"] > tbody {
+        display: block;
+    }
+
+    table[width="569"] > tbody > tr {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: stretch;
+        border: 1px solid #415680;
+        margin-bottom: 6px;
+        background: #1a2a40;
+        border-radius: 6px;
+        overflow: hidden;
+    }
+
+    table[width="569"] > tbody > tr > td.c {
+        flex: 0 0 100%;
+        text-align: center;
+        font-weight: bold;
+        font-size: 14px;
+        padding: 8px;
+        background: #2a3a5c;
+    }
+
+    /* Left cell: image + name */
+    table[width="569"] > tbody > tr > th.l {
+        flex: 1;
+        min-width: 0;
+        padding: 6px 8px;
+        border: 0;
+        border-right: 1px solid #415680;
+        display: flex;
+        align-items: center;
+    }
+
+    table[width="569"] > tbody > tr > th.l > table {
+        width: 100% !important;
+    }
+
+    table[width="569"] > tbody > tr > th.l > table td {
+        background-color: transparent;
+        padding: 0;
+        font-size: 12px;
+    }
+
+    table[width="569"] > tbody > tr > th.l img {
+        width: 24px !important;
+        height: 24px !important;
+        margin-right: 6px;
+        flex-shrink: 0;
+    }
+
+    /* Right cell: requirements */
+    table[width="569"] > tbody > tr > th[role="cell"].l {
+        flex: 2;
+        min-width: 0;
+        padding: 6px 8px;
+        border: 0;
+        font-size: 12px;
+        line-height: 1.4;
+    }
+
+    table[width="569"] > tbody > tr > th[role="cell"].l > table {
+        width: 100% !important;
+    }
+
+    table[width="569"] > tbody > tr > th[role="cell"].l > table td {
+        background-color: transparent;
+        padding: 0;
+        font-size: 12px;
+    }
+
+    /* ============================================
+       RESOURCE SETTINGS — Card layout
+       Each building: card with 2×2 production grid
+       .resource-settings class overrides generic
+       table[width="569"] tech tree rules
+       ============================================ */
+
+    /* Override generic 569 rules for resource settings */
+    table.resource-settings {
+        width: 100% !important;
+        min-width: 0 !important;
+        display: block !important;
+        overflow: visible !important;
+    }
+
+    table.resource-settings > tbody {
+        display: block;
+    }
+
+    table.resource-settings > tbody > tr {
+        display: flex !important;
+        flex-wrap: wrap !important;
+        align-items: stretch !important;
+        border: 1px solid #415680 !important;
+        margin-bottom: 8px !important;
+        background: #1a2a40 !important;
+        border-radius: 6px !important;
+        overflow: hidden !important;
+    }
+
+    /* Header: planet title spans full width */
+    table.resource-settings > tbody > tr > td.c {
+        flex: 0 0 100%;
+        text-align: center;
+        font-weight: bold;
+        font-size: 14px;
+        padding: 10px;
+        background: #2a3a5c;
+    }
+
+    /* Column headers: hide on mobile (icons do the job) */
+    table.resource-settings > tbody > tr > th:not([scope="row"]):not([role="cell"]) {
+        display: none;
+    }
+
+    /* Resource rows (with dropdown): card layout */
+    table.resource-settings > tbody > tr:has(select) {
+        padding: 0;
+    }
+
+    /* Building name header */
+    table.resource-settings > tbody > tr > th[scope="row"] {
+        flex: 0 0 100%;
+        text-align: left;
+        font-weight: bold;
+        font-size: 13px;
+        padding: 8px 10px;
+        background: #2a3a5c !important;
+        border: 0 !important;
+        border-bottom: 1px solid #415680 !important;
+    }
+
+    /* Production value cells: 2×2 grid (Metal, Crystal, Deut, Energy) */
+    table.resource-settings > tbody > tr > th[role="cell"]:nth-of-type(-n+4) {
+        flex: 1 1 0%;
+        min-width: 0;
+        text-align: center;
+        padding: 6px 2px;
+        border: 0 !important;
+        background: transparent !important;
+        font-size: 12px;
+        line-height: 1.4;
+    }
+
+    /* 2×2 grid: first and third cell get right border */
+    table.resource-settings > tbody > tr:has(select) > th[role="cell"]:nth-of-type(1),
+    table.resource-settings > tbody > tr:has(select) > th[role="cell"]:nth-of-type(3) {
+        border-right: 1px solid #415680;
+    }
+
+    /* First row of 2×2 gets bottom border */
+    table.resource-settings > tbody > tr:has(select) > th[role="cell"]:nth-of-type(1),
+    table.resource-settings > tbody > tr:has(select) > th[role="cell"]:nth-of-type(2) {
+        border-bottom: 1px solid #415680;
+    }
+
+    /* Production value labels (Metal:, Crystal:, etc) — resource rows only */
+    table.resource-settings > tbody > tr:has(select) > th[role="cell"]::before {
+        display: block;
+        font-size: 10px;
+        color: #8899aa;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 2px;
+    }
+
+    table.resource-settings > tbody > tr:has(select) > th[role="cell"]:nth-of-type(1)::before {
+        content: "Metal";
+    }
+
+    table.resource-settings > tbody > tr:has(select) > th[role="cell"]:nth-of-type(2)::before {
+        content: "Crystal";
+    }
+
+    table.resource-settings > tbody > tr:has(select) > th[role="cell"]:nth-of-type(3)::before {
+        content: "Deut";
+    }
+
+    table.resource-settings > tbody > tr:has(select) > th[role="cell"]:nth-of-type(4)::before {
+        content: "Energy";
+    }
+
+    /* Dropdown cell: full width below the grid */
+    table.resource-settings > tbody > tr > th[role="cell"]:nth-of-type(5) {
+        flex: 0 0 100%;
+        padding: 8px 10px;
+        border: 0 !important;
+        border-top: 1px solid #415680 !important;
+        background: transparent !important;
+        text-align: center;
+    }
+
+    /* The actual select dropdown */
+    table.resource-settings select {
+        width: 100%;
+        max-width: 200px;
+        font-size: 16px !important;
+        padding: 8px !important;
+        min-height: 44px;
+        background: #344566;
+        color: #E6EBFB;
+        border: 1px solid #415680;
+        border-radius: 4px;
+    }
+
+    /* Summary rows (Basic Income, Plasma, Storage, Totals) */
+    table.resource-settings > tbody > tr:has(td.k) {
+        padding: 4px 0;
+    }
+
+    table.resource-settings > tbody > tr > th[scope="row"] {
+        /* already styled above */
+    }
+
+    table.resource-settings > tbody > tr > td.k {
+        flex: 1;
+        min-width: 0;
+        text-align: center;
+        padding: 4px 2px;
+        border: 0;
+        font-size: 12px;
+    }
+
+    /* Submit button row */
+    table.resource-settings input[type="submit"] {
+        width: 100%;
+        font-size: 14px !important;
+        padding: 10px 20px !important;
+        min-height: 44px;
+    }
+
+    /* ============================================
+       FLEET MOVEMENT — Card layout
+       Each fleet flight becomes a readable card
+       ============================================ */
+
+    /* Override scroll wrapper for card mode */
+    .fleet-movement-scroll {
+        overflow: visible !important;
+    }
+
+    /* Table base */
+    table.fleet-movement {
+        width: 100% !important;
+        min-width: 0 !important;
+        display: block !important;
+    }
+
+    table.fleet-movement > tbody {
+        display: block;
+    }
+
+    table.fleet-movement > tbody > tr {
+        display: flex !important;
+        flex-wrap: wrap !important;
+        align-items: stretch !important;
+        border: 1px solid #415680 !important;
+        margin-bottom: 8px !important;
+        background: #1a2a40 !important;
+        border-radius: 6px !important;
+        overflow: hidden !important;
+    }
+
+    /* Header: fleet/expedition count spans full width */
+    table.fleet-movement > tbody > tr:has(td.c) {
+        background: #2a3a5c !important;
+        border: 0 !important;
+        margin-bottom: 12px !important;
+    }
+
+    table.fleet-movement > tbody > tr > td.c {
+        flex: 0 0 100%;
+        text-align: center;
+        font-weight: bold;
+        font-size: 14px;
+        padding: 10px;
+        background: transparent;
+    }
+
+    /* Hide column headers on mobile */
+    table.fleet-movement > tbody > tr:not(:has(th[role="cell"])):not(:has(td.c)) {
+        display: none !important;
+    }
+
+    /* Fleet number: badge top-left */
+    table.fleet-movement > tbody > tr > th:first-child {
+        flex: 0 0 auto;
+        width: 32px;
+        min-width: 32px;
+        display: block !important;
+        background: #344566 !important;
+        font-weight: bold;
+        font-size: 14px;
+        padding: 4px 0;
+        border: 0 !important;
+        border-right: 1px solid #415680 !important;
+        text-align: center;
+    }
+
+    /* Mission + fleet amount: top row */
+    table.fleet-movement > tbody > tr > th[role="cell"]:nth-of-type(1) {
+        flex: 1 1 0%;
+        min-width: 0;
+        display: block !important;
+        padding: 8px 10px;
+        border: 0 !important;
+        background: transparent !important;
+        font-size: 14px;
+        font-weight: bold;
+        text-align: left;
+    }
+
+    /* Mission type label (Returning / Outbound) */
+    table.fleet-movement > tbody > tr > th[role="cell"]:nth-of-type(1) a:last-child::before {
+        display: block;
+        font-size: 10px;
+        color: #8899aa;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    /* Fleet amount cell */
+    table.fleet-movement > tbody > tr > th[role="cell"]:nth-of-type(2) {
+        flex: 0 0 auto;
+        display: block !important;
+        padding: 8px 10px;
+        border: 0 !important;
+        background: transparent !important;
+        font-size: 13px;
+        text-align: right;
+    }
+
+    /* Start coords */
+    table.fleet-movement > tbody > tr > th[role="cell"]:nth-of-type(3) {
+        flex: 1 1 0%;
+        min-width: 0;
+        display: block !important;
+        padding: 6px 8px;
+        border: 0 !important;
+        border-bottom: 1px solid #415680 !important;
+        background: transparent !important;
+        font-size: 12px;
+        text-align: center;
+    }
+
+    /* End coords */
+    table.fleet-movement > tbody > tr > th[role="cell"]:nth-of-type(5) {
+        flex: 1 1 0%;
+        min-width: 0;
+        display: block !important;
+        padding: 6px 8px;
+        border: 0 !important;
+        border-bottom: 1px solid #415680 !important;
+        border-left: 1px solid #415680 !important;
+        background: transparent !important;
+        font-size: 12px;
+        text-align: center;
+    }
+
+    /* Start time — "Depart" label */
+    table.fleet-movement > tbody > tr > th[role="cell"]:nth-of-type(4) {
+        flex: 1 1 0%;
+        min-width: 0;
+        display: block !important;
+        padding: 6px 8px;
+        border: 0 !important;
+        background: transparent !important;
+        font-size: 12px;
+        text-align: center;
+    }
+
+    table.fleet-movement > tbody > tr > th[role="cell"]:nth-of-type(4)::before {
+        content: "Depart ";
+        font-size: 9px;
+        color: #8899aa;
+        text-transform: uppercase;
+    }
+
+    /* End time — "Arrive" label */
+    table.fleet-movement > tbody > tr > th[role="cell"]:nth-of-type(6) {
+        flex: 1 1 0%;
+        min-width: 0;
+        display: block !important;
+        padding: 6px 8px;
+        border: 0 !important;
+        border-left: 1px solid #415680 !important;
+        background: transparent !important;
+        font-size: 12px;
+        text-align: center;
+    }
+
+    table.fleet-movement > tbody > tr > th[role="cell"]:nth-of-type(6)::before {
+        content: "Arrive ";
+        font-size: 9px;
+        color: #8899aa;
+        text-transform: uppercase;
+    }
+
+    /* Arrival time — ETA full width */
+    table.fleet-movement > tbody > tr > th[role="cell"]:nth-of-type(8) {
+        flex: 0 0 100%;
+        display: block !important;
+        padding: 6px 8px;
+        border: 0 !important;
+        border-top: 1px solid #415680 !important;
+        background: transparent !important;
+        text-align: center;
+        font-size: 12px;
+        font-weight: bold;
+    }
+
+    table.fleet-movement > tbody > tr > th[role="cell"]:nth-of-type(8)::before {
+        content: "ETA ";
+        font-weight: normal;
+        color: #8899aa;
+    }
+
+    /* Actions row: full width */
+    table.fleet-movement > tbody > tr > th[role="cell"]:nth-of-type(9) {
+        flex: 0 0 100%;
+        display: block !important;
+        padding: 8px 10px;
+        border: 0 !important;
+        border-top: 1px solid #415680 !important;
+        background: transparent !important;
+        text-align: center;
+    }
+
+    /* Action buttons */
+    table.fleet-movement input[type="submit"],
+    table.fleet-movement input[type="button"] {
+        font-size: 14px !important;
+        padding: 10px 20px !important;
+        min-height: 44px;
+    }
+
+    /* ============================================
+       HOME PAGE — Landing page responsive
+       ============================================ */
+
+    /* ... home page CSS already added above ... */
+
+    /* ============================================
+       GALAXY — Navigation touch-friendly
+       ============================================ */
+    table[width="656px"] form table td {
+        padding: 4px 2px !important;
+    }
+
+    table[width="656px"] form input[type="button"],
+    table[width="656px"] form input[type="submit"] {
+        min-height: 44px !important;
+        min-width: 44px !important;
+        font-size: 14px !important;
+        padding: 8px 12px !important;
+    }
+
+    table[width="656px"] form input[type="number"] {
+        width: 60px !important;
+        min-height: 44px !important;
+        font-size: 16px !important;
+    }
+
+    /* Galaxy data rows: smaller text to fit */
+    table[width="656px"] th[role="cell"] {
+        font-size: 11px !important;
+        padding: 4px 2px !important;
+    }
+    #header {
+        width: 100% !important;
+        padding: 16px 8px 0 !important;
+        height: auto !important;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: center;
+    }
+
+    #header h1 {
+        float: none !important;
+        margin: 0 auto 10px !important;
+        text-align: center;
+    }
+
+    a#loginBtn {
+        float: none !important;
+        margin: 0 auto 10px !important;
+        display: block;
+    }
+
+    /* Login popup: full-width overlay */
+    #login {
+        position: fixed !important;
+        top: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        width: 100% !important;
+        height: 100% !important;
+        background: #0d1b2a !important;
+        z-index: 1000 !important;
+        display: none;
+        padding: 40px 16px;
+        overflow-y: auto;
+    }
+
+    #login.open {
+        display: block !important;
+    }
+
+    #loginForm {
+        width: 100% !important;
+        max-width: 320px;
+        margin: 0 auto !important;
+        height: auto !important;
+    }
+
+    #loginForm .black-border {
+        width: 100% !important;
+    }
+
+    #loginForm .black-border input {
+        width: 100% !important;
+        box-sizing: border-box;
+    }
+
+    #loginForm #loginSubmit {
+        width: 100% !important;
+    }
+
+    /* Registration: full-width */
+    #subscribe {
+        float: none !important;
+        display: block !important;
+        width: 100% !important;
+        margin: 16px 0 !important;
+    }
+
+    #subscribeForm {
+        width: 100% !important;
+        max-width: 400px;
+        margin: 0 auto;
+    }
+
+    #subscribeForm .input-wrap {
+        height: auto !important;
+        padding: 8px 10px;
+    }
+
+    #subscribeForm label {
+        width: 100% !important;
+    }
+
+    #subscribeForm .black-border {
+        width: 100% !important;
+    }
+
+    #subscribeForm .black-border input,
+    #subscribeForm .server_table {
+        width: 100% !important;
+        box-sizing: border-box;
+    }
+
+    #subscribeForm #submitWrap {
+        padding: 10px;
+    }
+
+    #subscribeForm #submitWrap label {
+        width: 100% !important;
+    }
+
+    #regSubmit {
+        width: 100% !important;
+        max-width: 300px;
+    }
+
+    /* Content area: full-width */
+    #content,
+    #footerContent {
+        width: 100% !important;
+        padding: 0 8px;
+        box-sizing: border-box;
+    }
+
+    #contentWrap {
+        float: none !important;
+        width: 100% !important;
+    }
+
+    #menu {
+        height: auto !important;
+        background: none !important;
+    }
+
+    #tabs {
+        width: 100% !important;
+        display: flex;
+        height: 44px !important;
+    }
+
+    #tabs li,
+    #tab4, #tab5 {
+        flex: 1;
+        width: auto !important;
+        height: 44px !important;
+    }
+
+    #tabs li a,
+    #tab4, #tab5 {
+        line-height: 44px !important;
+        font-size: 13px;
+    }
+
+    #tabContent {
+        width: 100% !important;
+        padding: 10px !important;
+        box-sizing: border-box;
+    }
+
+    #contentFooter {
+        width: 100% !important;
+        height: 20px !important;
+    }
+
+    /* Footer */
+    #footer {
+        height: auto !important;
+        padding: 16px 8px;
+        text-align: center;
+    }
+
+    #copyright {
+        float: none !important;
+    }
+
+    /* ============================================
+       FLEET DISPATCH (fleet1) — Ship selection
+       OVERRIDES overview card-layout rules that
+       match fleet tables via broad :has() selectors
+       ============================================ */
+    form[action="game.php?page=fleet2"] > table[width="519"] {
+        width: 100% !important;
+        display: table !important;
+    }
+
+    /* Reset ALL rows inside fleet1 form table to normal table display */
+    form[action="game.php?page=fleet2"] > table[width="519"] tr {
+        display: table-row !important;
+        flex-wrap: initial !important;
+        align-items: initial !important;
+        border: 0 !important;
+        margin: 0 !important;
+        background: transparent !important;
+        border-radius: 0 !important;
+        overflow: visible !important;
+    }
+
+    /* Reset all cells to normal */
+    form[action="game.php?page=fleet2"] > table[width="519"] th {
+        display: table-cell !important;
+        flex: initial !important;
+        min-width: initial !important;
+        width: auto !important;
+        padding: 4px 6px !important;
+        border: 1px solid #415680 !important;
+        font-size: 13px;
+    }
+
+    /* Ship name column slightly wider */
+    form[action="game.php?page=fleet2"] > table[width="519"] th[scope="row"] {
+        text-align: left !important;
+        font-weight: normal !important;
+        background: transparent !important;
+    }
+
+    /* Ship input: tappable size */
+    form[action="game.php?page=fleet2"] > table[width="519"] input[type="number"] {
+        width: 50px !important;
+    }
+
+    /* Continue button: full width */
+    form[action="game.php?page=fleet2"] > table[width="519"] input[type="submit"] {
+        width: 100% !important;
+    }
+
+    /* ============================================
+       FLEET STEP 2 — Stack panels vertically
+       OVERRIDES overview card-layout rules
+       ============================================ */
+    form[action="game.php?page=fleet3"] > table[width="519"] {
+        width: 100% !important;
+        display: table !important;
+    }
+
+    /* Reset rows to normal table display */
+    form[action="game.php?page=fleet3"] > table[width="519"] tr {
+        display: table-row !important;
+        flex-wrap: initial !important;
+        align-items: initial !important;
+        border: 0 !important;
+        margin: 0 !important;
+        background: transparent !important;
+        border-radius: 0 !important;
+        overflow: visible !important;
+    }
+
+    /* Reset cells to normal */
+    form[action="game.php?page=fleet3"] > table[width="519"] th,
+    form[action="game.php?page=fleet3"] > table[width="519"] td {
+        display: table-cell !important;
+        flex: initial !important;
+        min-width: initial !important;
+        width: auto !important;
+    }
+
+    /* Stack the two side-by-side panels (missions + resources) */
+    form[action="game.php?page=fleet3"] > table[width="519"] > tbody > tr > th {
+        display: block !important;
+        width: 100% !important;
+    }
+
+    form[action="game.php?page=fleet3"] > table[width="519"] > tbody > tr > th > table {
+        width: 100% !important;
+    }
+
+    /* Destination inputs */
+    form[action="game.php?page=fleet3"] input[name="galaxy"],
+    form[action="game.php?page=fleet3"] input[name="system"],
+    form[action="game.php?page=fleet3"] input[name="planet"] {
+        width: 60px !important;
+    }
+
+    form[action="game.php?page=fleet3"] select[name="speed"] {
+        width: 80px !important;
+    }
+
+    form[action="game.php?page=fleet3"] select[name="planettype"] {
+        width: 100% !important;
+        margin-top: 4px;
+    }
+
+    /* ============================================
+       FLEET STEP 3 — Stack mission + resources
+       OVERRIDES overview card-layout rules
+       ============================================ */
+    form[action="game.php?page=fleet4"] > table[role="presentation"] {
+        width: 100% !important;
+        display: table !important;
+    }
+
+    /* Reset rows to normal */
+    form[action="game.php?page=fleet4"] > table[role="presentation"] tr {
+        display: table-row !important;
+        flex-wrap: initial !important;
+        align-items: initial !important;
+        border: 0 !important;
+        margin: 0 !important;
+        background: transparent !important;
+        border-radius: 0 !important;
+        overflow: visible !important;
+    }
+
+    /* Reset cells to normal */
+    form[action="game.php?page=fleet4"] > table[role="presentation"] th,
+    form[action="game.php?page=fleet4"] > table[role="presentation"] td {
+        display: table-cell !important;
+        flex: initial !important;
+        min-width: initial !important;
+        width: auto !important;
+    }
+
+    /* Stack the two panels (mission + resources) */
+    form[action="game.php?page=fleet4"] > table[role="presentation"] > tbody > tr[valign="top"] > th {
+        display: block !important;
+        width: 100% !important;
+    }
+
+    form[action="game.php?page=fleet4"] > table[role="presentation"] > tbody > tr[valign="top"] > th > table {
+        width: 100% !important;
+    }
+
+    /* Reset nested table rows inside panels */
+    form[action="game.php?page=fleet4"] > table[role="presentation"] > tbody > tr[valign="top"] > th > table tr {
+        display: table-row !important;
+    }
+
+    form[action="game.php?page=fleet4"] > table[role="presentation"] > tbody > tr[valign="top"] > th > table th {
+        display: table-cell !important;
+    }
+
+    /* Resource inputs full-width */
+    form[action="game.php?page=fleet4"] input[name="resource1"],
+    form[action="game.php?page=fleet4"] input[name="resource2"],
+    form[action="game.php?page=fleet4"] input[name="resource3"] {
+        width: 100% !important;
+        max-width: 200px;
+    }
+
+    /* ============================================
+       FLEET MOVEMENT — Horizontal scroll
+       Only target tables with many columns (9-col
+       movement/fleet tables), not simple layouts
+       ============================================ */
+    table[width="519"]:has(> tbody > tr > th:nth-child(7)) {
+        width: 100% !important;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        display: block;
+    }
+}
+
+/* ============================================
+   PHONE-SPECIFIC (≤480px)
+   ============================================ */
+@media (max-width: 480px) {
+
+    #navbar {
+        padding-left: 52px;
+    }
+
+    table#resources td.header {
+        min-width: 50px;
+        padding: 2px;
+    }
+
+    table#resources td.header img {
+        width: 24px;
+        height: 13px;
+    }
+
+    table tr:has(td.l:first-child:not([colspan])):has(td.k:last-child) td.l:first-child,
+    table tr:has(th.l:first-child:not([colspan])):has(th.l:last-child) th.l:first-child,
+    table tr:has(th.l:first-child:not([colspan])):has(th.k:last-child) th.l:first-child {
+        width: 64px;
+        min-width: 64px;
+    }
+
+    table tr:has(td.l:first-child:not([colspan])):has(td.k:last-child) td.l:first-child img,
+    table tr:has(th.l:first-child:not([colspan])):has(th.l:last-child) th.l:first-child img,
+    table tr:has(th.l:first-child:not([colspan])):has(th.k:last-child) th.l:first-child img {
+        width: 48px !important;
+        height: 48px !important;
+    }
+
+    /* Officers tighter */
+    #header_top td.header img[width="32"] {
+        width: 24px;
+        height: 24px;
+    }
+}

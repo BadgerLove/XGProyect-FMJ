@@ -2,6 +2,7 @@
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="language" content="es">
     <meta name="author" content="XG Proyect">
     <meta name="publisher" content="XG Proyect">
@@ -17,6 +18,7 @@
     <link rel="stylesheet" type="text/css" href="{{ asset('assets/css/home/reset.css') }}">
     <link rel="stylesheet" type="text/css" href="{{ asset('assets/css/home/forms.css') }}">
     <link rel="stylesheet" type="text/css" href="{{ asset('assets/css/home/all.css') }}">
+    <link rel="stylesheet" type="text/css" href="{{ asset('assets/css/mobile.css') }}">
     <script type="text/javascript" src="{{ asset('assets/js/home/jquery.tools.min.js') }}"></script>
     <style type="text/css"></style>
     <script type="text/javascript" src="{{ asset('assets/js/home/jquery.easing-1.3.pack.js') }}"></script>

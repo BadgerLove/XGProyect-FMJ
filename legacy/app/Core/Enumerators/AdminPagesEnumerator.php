@@ -30,6 +30,7 @@ abstract class AdminPagesEnumerator
         'errors',
         'fleets',
         'messages',
+        'bot-detection',
     ];
 
     public const EDITION = [

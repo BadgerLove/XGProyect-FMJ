@@ -71,10 +71,35 @@ class Colonize extends Missions
                         } else {
                             parent::storeResources($fleet_row);
 
-                            $this->updateColonizatonReturningFleet([
-                                'ships' => $this->buildNewFleet($fleet_row['fleet_array']),
+                            // Land escort ships on the new planet (colony ship is consumed)
+                            $fleet_ships = FleetsLib::getFleetShipsArray($fleet_row['fleet_array']);
+                            $ships_fields = '';
+
+                            foreach ($fleet_ships as $ship => $count) {
+                                if ($ship == 208) {
+                                    continue; // Colony ship consumed — don't add to planet
+                                }
+
+                                if ($count > 0) {
+                                    $ships_fields .= '`' . $this->resource[$ship] . '` = `' . $this->resource[$ship] . '` + ' . (int) $count . ', ';
+                                }
+                            }
+
+                            if ($ships_fields !== '') {
+                                $this->updatePlanetsShipsByCoords([
+                                    'resources' => ['metal' => 0, 'crystal' => 0, 'deuterium' => 0],
+                                    'ships' => $ships_fields,
+                                    'coords' => [
+                                        'galaxy' => $fleet_row['fleet_end_galaxy'],
+                                        'system' => $fleet_row['fleet_end_system'],
+                                        'planet' => $fleet_row['fleet_end_planet'],
+                                        'type' => $fleet_row['fleet_end_type'],
+                                    ],
+                                ]);
+                            }
+
+                            $this->updateColonizationStatistics([
                                 'points' => StatisticsLibrary::calculatePoints(208, 1),
-                                'fleet_id' => $fleet_row['fleet_id'],
                                 'coords' => [
                                     'galaxy' => $fleet_row['fleet_start_galaxy'],
                                     'system' => $fleet_row['fleet_start_system'],
@@ -82,6 +107,8 @@ class Colonize extends Missions
                                     'type' => $fleet_row['fleet_start_type'],
                                 ],
                             ]);
+
+                            parent::removeFleet($fleet_row['fleet_id']);
                         }
                     } else {
                         $this->colonizeMessage($fleet_row['fleet_owner'], $message[3], $fleet_row['fleet_end_time']);
@@ -94,10 +121,10 @@ class Colonize extends Missions
 
                 parent::returnFleet($fleet_row['fleet_id']);
             }
-        }
-
-        if ($fleet_row['fleet_end_time'] < time()) {
-            parent::restoreFleet($fleet_row, true);
+        } elseif ($fleet_row['fleet_end_time'] < time()) {
+            // Fleet has returned — clean up only, no restore.
+            // Resources were already transferred to the new planet,
+            // and updateColonizatonReturningFleet handled the return.
             parent::removeFleet($fleet_row['fleet_id']);
         }
     }

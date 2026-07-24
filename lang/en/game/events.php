@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 return [
     'ev_no_fleet_data' => 'No fleet data',
+    'ev_fleet_cancel' => 'Recall',
+    'ev_fleet_cancel_confirm' => 'Are you sure you want to recall this fleet?',
     'ev_aproaching' => 'They approach ',
     'ev_ships' => ' ships',
     'ev_from_the_planet' => 'from the planet ',

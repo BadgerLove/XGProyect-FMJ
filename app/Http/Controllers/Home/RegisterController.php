@@ -64,7 +64,14 @@ class RegisterController extends BaseController
             ));
 
             $newUser->preferences()->create();
-            $newUser->premium()->create();
+            $newUser->premium()->create([
+                'premium_dark_matter' => $this->settingsService->getInt('registration_dark_matter'),
+                'premium_officier_commander' => 1,
+                'premium_officier_admiral' => 1,
+                'premium_officier_engineer' => 1,
+                'premium_officier_geologist' => 1,
+                'premium_officier_technocrat' => 1,
+            ]);
             $newUser->research()->create();
             $newUser->stats()->create();
 

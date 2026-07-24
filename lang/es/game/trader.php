@@ -27,10 +27,25 @@ return [
     'tr_merchant2_title' => 'Canjea tus recursos.',
     'tr_step1' => '1. Canjea tus recursos.',
     'tr_step2' => '2. Llamar al mercader',
-    'tr_price' => 'Coste: %s de Materia Oscura (por llamada)',
+    'tr_price' => 'Coste: 3,500 de Materia Oscura (por llamada)',
     'tr_call_button' => 'Llamar al mercader',
     'tr_no_enough_storage' => 'No hay suficiente capacidad de almacenamiento.',
     'tr_no_enough_dark_matter' => 'No hay suficiente materia oscura disponible',
+    'tr_invalid_exchange' => 'Selección de cambio no válida.',
+    'tr_same_resource' => 'No puedes cambiar un recurso por sí mismo.',
+    'tr_no_resource_to_sell' => 'No tienes nada para canjear.',
+
+    // Merchant exchange
+    'tr_merchant_title' => 'El Mercader',
+    'tr_merchant_intro' => 'El mercader canjeará tus recursos por una tarifa de 3,500 de Materia Oscura.',
+    'tr_you_have' => 'Disponible',
+    'tr_exchange_rate' => 'Tipo de cambio',
+    'tr_dm_cost' => 'Coste',
+    'tr_exchange_for' => 'Canjear por',
+    'tr_amount_to_sell' => 'Cantidad a canjear',
+    'tr_you_receive' => 'Recibirás',
+    'tr_confirm_trade' => 'Confirmar canje',
+    'tr_cancel' => 'Cancelar',
 
     // traderAuctioneer
 

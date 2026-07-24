@@ -3,9 +3,56 @@
 @section('content')
 <script  language="JavaScript">
     function galaxy_submit(value) {
-        document.getElementById('auto').name = value;
-        document.getElementById('galaxy_form').submit();
+        var form = document.getElementById('galaxy_form');
+        var formData = new FormData(form);
+        if (value) {
+            formData.append(value, value);
+        }
+
+        fetch('game.php?page=galaxy&mode=1&ajax=1', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            document.querySelector('input[name="galaxy"]').value = data.galaxy;
+            document.querySelector('input[name="system"]').value = data.system;
+            
+            var countEl = document.getElementById('planet_count_display');
+            if (countEl) {
+                countEl.innerHTML = data.planet_count;
+            }
+            
+            var tbody = document.getElementById('galaxy_rows');
+            if (tbody) {
+                var html = '';
+                data.positions.forEach(function(item) {
+                    html += '<tr>' +
+                        '<th role="cell" width="30px">' + item.pos + '</th>' +
+                        '<th role="cell" width="30px">' + item.planet + '</th>' +
+                        '<th role="cell" width="130px" style="white-space: nowrap;">' + item.planetname + '</th>' +
+                        '<th role="cell" width="30px" style="white-space: nowrap;">' + item.moon + '</th>' +
+                        '<th role="cell" width="30px" style="white-space: nowrap;">' + item.debris + '</th>' +
+                        '<th role="cell" width="150px">' + item.username + '</th>' +
+                        '<th role="cell" width="80px">' + item.alliance + '</th>' +
+                        '<th role="cell" width="125px" style="white-space: nowrap;">' + item.actions + '</th>' +
+                    '</tr>';
+                });
+                tbody.innerHTML = html;
+            }
+        })
+        .catch(error => console.error('Error fetching galaxy:', error));
     }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        var form = document.getElementById('galaxy_form');
+        if (form) {
+            form.addEventListener('submit', function(e) {
+                e.preventDefault();
+                galaxy_submit('');
+            });
+        }
+    });
 
     function fenster(target_url, win_name) {
         var new_win = window.open(target_url, win_name, 'scrollbars=yes,menubar=no,top=0,left=0,toolbar=no,width=550,height=280,resizable=yes');
@@ -291,6 +338,7 @@
         <td role="columnheader" class="c">{{ __('game/galaxy.gl_alliance') }}</td>
         <td role="columnheader"class="c">{{ __('game/galaxy.gl_actions') }}</td>
     </tr>
+    <tbody id="galaxy_rows">
     @foreach ($list_of_positions as $item)
     <tr>
         <th role="cell" width="30px">{{ $item['pos'] }}</th>
@@ -303,6 +351,7 @@
         <th role="cell" width="125px" style="white-space: nowrap;">{!! $item['actions'] !!}</th>
     </tr>
     @endforeach
+    </tbody>
     <tr id="fleetstatusrow">
         <th role="cell" class="c" colspan="8">
             <table style="font-weight: bold" width="100%" id="fleetstatustable">
@@ -312,7 +361,7 @@
     </tr>
     <tr>
         <td class="c" colspan="7">
-            {{ $planet_count }} {{ __('game/galaxy.gl_colonized_planets') }}
+            <span id="planet_count_display">{{ $planet_count }}</span> {{ __('game/galaxy.gl_colonized_planets') }}
         </td>
         <td class="c">
             <a href="#" style="cursor: pointer;" onmouseover='return overlib("<table width=150><tr><td class=c colspan=2>{{ __('game/galaxy.gl_legend') }}</td></tr><tr><td style=width: 20px;><span class=status_abbr_admin>{{ __('game/galaxy.gl_a') }}</span></td><td width=220>{{ __('game/galaxy.gl_administrator') }}</td></tr><tr><td style=width: 20px;><span class=status_abbr_strong>{{ __('game/galaxy.gl_s') }}</span></td><td width=220>{{ __('game/galaxy.gl_strong_player') }}</td></tr><tr><td style=width: 20px;><span class=status_abbr_noob>{{ __('game/galaxy.gl_w') }}</span></td><td width=220>{{ __('game/galaxy.gl_week_player') }}</td></tr><tr><td style=width: 20px;><span class=status_abbr_outlaw>{{ __('game/galaxy.gl_o') }}</span></td><td width=220>{{ __('game/galaxy.gl_outlaw') }}</td> </tr><tr><td style=width: 20px;><span class=status_abbr_vacation>{{ __('game/galaxy.gl_v') }}</span></td><td width=220>{{ __('game/galaxy.gl_vacation') }}</td></tr><tr><td style=width: 20px;><span class=status_abbr_banned><s>{{ __('game/galaxy.gl_b') }}</s></span></td><td width=220>{{ __('game/galaxy.gl_banned') }}</td> </tr> <tr> <td style=width: 20px;><span class=status_abbr_inactive>{{ __('game/galaxy.gl_i') }}</span></td> <td width=220>{{ __('game/galaxy.gl_inactive_seven') }}</td></tr><tr><td style=width: 20px;><span class=status_abbr_longinactive>{{ __('game/galaxy.gl_I') }}</span></td><td width=220>{{ __('game/galaxy.gl_inactive_twentyeight') }}</td></tr><tr> <td style=width: 20px;><span class=status_abbr_honorableTarget>{{ __('game/galaxy.gl_hp') }}</span></td><td width=220>{{ __('game/galaxy.gl_honourable_target') }}</td></tr></table>", STICKY, MOUSEOFF, DELAY, 750, CENTER, OFFSETY, -150);' onmouseout='return nd();'>

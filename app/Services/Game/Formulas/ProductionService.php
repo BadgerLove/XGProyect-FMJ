@@ -11,7 +11,7 @@ class ProductionService
 {
     public function maxStorable(int $storageLevel): int
     {
-        return (int) (2.5 * pow(M_E, (20 * $storageLevel / 33))) * 5000;
+        return (int) (2.5 * pow(M_E, (20 * $storageLevel / 33)) * 5000);
     }
 
     public function maxProductionPercentage(int $maxEnergy, int $energyUsed): int

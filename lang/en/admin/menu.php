@@ -24,6 +24,7 @@ return [
     'errors' => 'Server Errors',
     'fleets' => 'Fleet movements',
     'messages' => 'Messages',
+    'bot-detection' => 'Bot Detection',
     'users' => 'Users',
     'bots' => 'Bots',
     'alliances' => 'Alliances',

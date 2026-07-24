@@ -433,7 +433,7 @@ class ShipyardController extends BaseController
             $buildable['deuterium'] = floor($this->resources_consumed['deuterium'] / $price_deuterium);
         }
 
-        return max(min($buildable), 0);
+        return (int) max(min($buildable), 0);
     }
 
     private function getMaxBuildableItemsBySystemLimit(): int

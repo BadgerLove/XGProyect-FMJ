@@ -107,6 +107,7 @@ class BotService
                     'register_time' => $time,
                     'onlinetime' => $time,
                     'authlevel' => UserRanksEnumerator::PLAYER,
+                    'bot_profile' => json_encode($this->generateProfile()),
                 ]);
 
                 $bot->preferences()->create();
@@ -136,13 +137,93 @@ class BotService
         }
     }
 
+    /**
+     * Generate a random activity profile for a bot.
+     *
+     * Each bot gets a unique timezone, active window, and personality.
+     * Sleep window is at least 6 hours.
+     *
+     * @return array{tz_offset: int, active_start: int, active_end: int, personality: string}
+     */
+    private function generateProfile(): array
+    {
+        // Timezone offset: -5 (US East) to +12 (NZ) — weighted toward EU/RU
+        $tzOffsets = [-5, -4, -3, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 4, 5, 8, 9, 10, 12];
+        $tzOffset = $tzOffsets[array_rand($tzOffsets)];
+
+        // Active window: pick a start hour, then end is start + 12-18 hours (6-12 hour sleep)
+        $activeStart = random_int(0, 23);
+        $activeHours = random_int(12, 18); // 12-18 hours active = 6-12 hours sleep
+        $activeEnd = ($activeStart + $activeHours) % 24;
+
+        // Personality distribution
+        $personalities = ['raider', 'raider', 'raider', 'turtle', 'turtle', 'balanced', 'passive'];
+        $personality = $personalities[array_rand($personalities)];
+
+        return [
+            'tz_offset'   => $tzOffset,
+            'active_start' => $activeStart,
+            'active_end'   => $activeEnd,
+            'personality'  => $personality,
+        ];
+    }
+
     private function uniqueName(): string
     {
         do {
-            $name = 'Bot_' . Str::upper(Str::random(8));
+            $name = $this->generateBotName();
         } while (User::where('name', $name)->exists());
 
         return $name;
+    }
+
+    /**
+     * Generate a themed bot name.
+     * Combines an adjective/prefix with a noun/suffix for variety.
+     */
+    private function generateBotName(): string
+    {
+        $prefixes = [
+            // Military
+            'Dark', 'Iron', 'Steel', 'Shadow', 'Silent', 'Rapid', 'Fierce',
+            'Crimson', 'Frozen', 'Burning', 'Toxic', 'Venom', 'Rogue',
+            // Space
+            'Cosmic', 'Stellar', 'Nova', 'Nebula', 'Void', 'Astral', 'Solar',
+            'Lunar', 'Orbital', 'Quantum', 'Plasma', 'Gamma', 'Neutron',
+            // OGame themed
+            'Battle', 'War', 'Death', 'Doom', 'Rage', 'Fury', 'Havoc',
+            'Titan', 'Atlas', 'Spartan', 'Phantom', 'Ghost', 'Spectre',
+            // Nature
+            'Swift', 'Wild', 'Storm', 'Thunder', 'Blazing', 'Arctic',
+            'Savage', 'Proud', 'Ancient', 'Elder', 'Prime', 'Grand',
+        ];
+
+        $suffixes = [
+            // Military
+            'Raider', 'Hunter', 'Striker', 'Slayer', 'Blade', 'Fist', 'Hawk',
+            'Wolf', 'Fang', 'Claw', 'Eagle', 'Viper', 'Cobra', 'Scorpion',
+            // Space
+            'Star', 'Comet', 'Meteor', 'Pulsar', 'Quasar', 'Voyager',
+            'Pioneer', 'Ranger', 'Sentinel', 'Warden', 'Keeper', 'Guardian',
+            // OGame themed
+            'Trader', 'Commander', 'Admiral', 'Captain', 'General', 'Baron',
+            'Lord', 'King', 'Emperor', 'Conqueror', 'Destroyer', 'Reaper',
+            // Ships
+            'Cruiser', 'Fighter', 'Bomber', 'Dreadnought', 'Titan', 'Colossus',
+            // Misc
+            'Storm', 'Fury', 'Rage', 'Force', 'Power', 'Core', 'Edge',
+            'Spark', 'Shade', 'Drift', 'Rift', 'Surge', 'Crush',
+        ];
+
+        $prefix = $prefixes[array_rand($prefixes)];
+        $suffix = $suffixes[array_rand($suffixes)];
+
+        // Avoid duplicate prefix/suffix (e.g., "StormStorm")
+        while ($prefix === $suffix) {
+            $suffix = $suffixes[array_rand($suffixes)];
+        }
+
+        return $prefix . $suffix;
     }
 
     private function uniqueEmail(): string

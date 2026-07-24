@@ -50,6 +50,8 @@ class Leftmenu extends Component
             ['game.php?page=fleet1', 'lm_fleet', '', '#ffffff', false, '1', '8'],
             ['game.php?page=movement', 'lm_movement', '', '#ffffff', false, '1', '9'],
             ['game.php?page=galaxy', 'lm_galaxy', '&mode=0', '#ffffff', false, '1', '11'],
+            ['game.php?page=battlesimulator', 'lm_battlesimulator', '', '#ff8900', false, '1', ''],
+            ['game.php?page=expeditionguide', 'lm_expeditionguide', '', '#ff8900', false, '1', ''],
             ['game.php?page=empire', 'lm_empire', '', '#ffffff', false, '1', '2'],
             ['game.php?page=alliance', 'lm_alliance', '', '#ffffff', false, '1', '13'],
             ['game.php?page=premium', 'lm_officiers', '', '#ff8900', false, '1', '15'],

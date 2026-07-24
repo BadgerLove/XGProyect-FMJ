@@ -8,7 +8,7 @@
         <div class="inner-box clearfix">
             <h2>{{ __('home/ajax/home.aj_home_conquer_universe') }}</h2>
             <p>{!! __('home/ajax/home.aj_home_description') !!}</p>
-            <a class="overlay button" href="index.php?page=rules" title="{{ __('home/ajax/home.aj_home_rules') }}">
+            <a class="button" href="/rules" title="{{ __('home/ajax/home.aj_home_rules') }}">
                 {{ __('home/ajax/home.aj_home_rules') }}
             </a>
         </div>

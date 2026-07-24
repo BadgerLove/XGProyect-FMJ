@@ -229,6 +229,17 @@ class GalaxyController extends BaseController
             $parse
         ) : ' ';
 
+        if (isset($_GET['ajax']) && $_GET['ajax'] == '1') {
+            header('Content-Type: application/json');
+            echo json_encode([
+                'galaxy' => $this->_galaxy,
+                'system' => $this->_system,
+                'planet_count' => $this->planet_count,
+                'positions' => array_values($this->buildPositionsList())
+            ]);
+            exit;
+        }
+
         Template::legacyView(
             'galaxy.galaxy_view',
             array_merge(

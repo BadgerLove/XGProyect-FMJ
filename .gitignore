@@ -30,3 +30,21 @@ storage/logs/*.txt
 vendor
 config/xgp-db-config.php
 .php-cs-fixer.cache
+config/installed.php
+
+# Debug & test scripts
+check_*.php
+debug_*.php
+diagnose*.php
+test_*.php
+seed_*.php
+health*.php
+clear_*.php
+find_constants.php
+bot-tick-hidden.vbs
+xgproyect
+*.backup-*.php
+
+# Compiled views
+storage/framework/views/*.php
+!storage/framework/views/.gitignore

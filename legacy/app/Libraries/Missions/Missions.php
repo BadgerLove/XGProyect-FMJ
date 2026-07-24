@@ -133,6 +133,10 @@ class Missions
             ],
         ]);
 
+        if (empty($target_planet) || !isset($target_planet['planet_user_id'])) {
+            return;
+        }
+
         $target_user = $this->getAllUserDataByUserId(
             $target_planet['planet_user_id']
         );

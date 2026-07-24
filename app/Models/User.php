@@ -74,6 +74,7 @@ class User extends Authenticatable
         'register_time',
         'onlinetime',
         'fleet_shortcuts',
+        'bot_profile',
         'ally_id',
         'ally_request',
         'ally_request_text',
@@ -143,7 +144,12 @@ class User extends Authenticatable
     // Functions ...
     public function setPasswordAttribute(string $input): void
     {
-        $this->attributes['password'] = Hash::make($input);
+        // Don't re-hash if it's already a bcrypt hash
+        if (!str_starts_with($input, '$2y$')) {
+            $this->attributes['password'] = Hash::make($input);
+        } else {
+            $this->attributes['password'] = $input;
+        }
     }
 
     // Relations ...

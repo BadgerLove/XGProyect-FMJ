@@ -36,7 +36,7 @@ class Topnav extends Component
     {
         $rawId = session('user_id');
         $user = User::findOrFail(is_int($rawId) ? $rawId : 0);
-        $planet = Planets::where([
+        $planet = Planets::with('buildings')->where([
             ['planet_user_id', '=', $user->id],
             ['planet_id', '=', $user->current_planet],
             ['planet_destroyed', '=', 0],
@@ -50,15 +50,17 @@ class Topnav extends Component
             $planet->planet_energy_max + $planet->planet_energy_used
         ) . ' / ' . $this->formatService->prettyNumber($planet->planet_energy_max);
 
-        if ($planet->planet_metal >= $this->productionService->maxStorable((int) ($planet->building_metal_store ?? 0))) {
+        $buildings = $planet->buildings;
+
+        if ($planet->planet_metal >= $this->productionService->maxStorable((int) ($buildings->building_metal_store ?? 0))) {
             $metal = $this->formatService->colorRed($metal);
         }
 
-        if ($planet->planet_crystal >= $this->productionService->maxStorable((int) ($planet->building_crystal_store ?? 0))) {
+        if ($planet->planet_crystal >= $this->productionService->maxStorable((int) ($buildings->building_crystal_store ?? 0))) {
             $crystal = $this->formatService->colorRed($crystal);
         }
 
-        if ($planet->planet_deuterium >= $this->productionService->maxStorable((int) ($planet->building_deuterium_tank ?? 0))) {
+        if ($planet->planet_deuterium >= $this->productionService->maxStorable((int) ($buildings->building_deuterium_tank ?? 0))) {
             $deuterium = $this->formatService->colorRed($deuterium);
         }
 

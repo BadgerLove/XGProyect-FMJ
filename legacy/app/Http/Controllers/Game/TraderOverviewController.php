@@ -15,13 +15,6 @@ class TraderOverviewController extends BaseController
     {
         Functions::moduleMessage(Functions::isModuleAccesible(Module::Trader));
 
-        Template::legacyView(
-            'trader.overview',
-            [
-                'color' => '',
-                'message' => '',
-                'currentMode' => '',
-            ]
-        );
+        Functions::redirect('game.php?page=traderResources');
     }
 }

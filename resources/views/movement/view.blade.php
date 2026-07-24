@@ -3,7 +3,8 @@
 @section('content')
 <script type="text/javascript" src="{{ asset('assets/js/flotten-min.js') }}"></script>
 <script type="text/javascript" src="{{ asset('assets/js/ocnt-min.js') }}"></script>
-<table width="519" border="0" cellpadding="0" cellspacing="1">
+<div class="fleet-movement-scroll">
+<table width="519" border="0" cellpadding="0" cellspacing="1" class="fleet-movement">
     <tr height="20">
         <td colspan="9" class="c">
             <table border="0" width="100%">
@@ -57,4 +58,5 @@
     </tr>
     @endforeach
 </table>
+</div>
 @endsection

@@ -39,7 +39,7 @@ class LoginController extends BaseController
                 $ban->delete();
             }
 
-            $request->session()->regenerate();
+            $request->session()->regenerate(true);
 
             $this->sessionService->setLoginData(
                 $authUser->id,

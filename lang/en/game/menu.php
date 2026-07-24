@@ -6,6 +6,8 @@ return [
     'lm_players' => 'Player:',
     'lm_overview' => 'Overview',
     'lm_galaxy' => 'Galaxy',
+    'lm_battlesimulator' => 'Battle Simulator',
+    'lm_expeditionguide' => 'Expedition Guide',
     'lm_empire' => 'Empire',
     'lm_fleet' => 'Fleet',
     'lm_movement' => 'Fleet movement',

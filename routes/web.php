@@ -11,13 +11,20 @@ use App\Http\Controllers\Home\Ajax\InfoController;
 use App\Http\Controllers\Home\Ajax\MediaController;
 use App\Http\Controllers\Home\LoginController;
 use App\Http\Controllers\Home\RegisterController;
+use App\Http\Controllers\Game\BattleSimulatorController as BattleSim;
+use App\Http\Controllers\Home\RulesController;
 use App\Http\Controllers\Home\WelcomeController;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('/')->group(function () {
     Route::get('/', WelcomeController::class)->name('home.index');
+    Route::get('/rules', RulesController::class)->name('home.rules');
     Route::post('/login', LoginController::class)->name('home.login');
     Route::post('/register', RegisterController::class)->name('home.register');
+});
+
+Route::prefix('game/battle-simulator')->group(function () {
+    Route::post('/simulate', [BattleSim::class, 'simulate'])->name('battlesimulator.simulate');
 });
 
 Route::prefix('home/ajax')->group(function () {
@@ -67,6 +74,7 @@ Route::prefix('admin')->group(function () {
             Route::get('/changelog/{changelog}/edit', [Admin\ChangelogController::class, 'edit'])->name('admin.changelog.edit');
             Route::put('/changelog/{changelog}', [Admin\ChangelogController::class, 'update'])->name('admin.changelog.update');
             Route::delete('/changelog/{changelog}', [Admin\ChangelogController::class, 'destroy'])->name('admin.changelog.destroy');
+            Route::get('/bot-detection', [Admin\BotDetectionController::class, 'index'])->name('admin.bot-detection');
             Route::get('/errors', [Admin\ErrorsController::class, 'index'])->name('admin.errors');
             Route::get('/errors/export', [Admin\ErrorsController::class, 'export'])->name('admin.errors.export');
             Route::post('/errors/delete', [Admin\ErrorsController::class, 'deleteAll'])->name('admin.errors.delete');

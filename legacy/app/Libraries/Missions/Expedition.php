@@ -20,6 +20,7 @@ class Expedition extends Missions
 {
     private int $resourceExpeditionPoints = 0;
     private int $shipExpeditionPoints = 0;
+    private int $fleetTotalValue = 0;
     private int $fleetCapacity = 0;
 
     public function __construct(
@@ -36,7 +37,24 @@ class Expedition extends Missions
         if (parent::canStartMission($fleet)) {
             $this->setExpeditionPoints($fleet);
 
-            switch ($this->expeditionService->getExpeditionResult()) {
+            // Record expedition activity for depletion tracking
+            $expGalaxy = (int) $fleet['fleet_end_galaxy'];
+            $expSystem = (int) $fleet['fleet_end_system'];
+            $this->expeditionService->recordExpedition($expGalaxy, $expSystem);
+
+            // Check for probes in fleet — send depletion report
+            $fleetShips = \Xgp\App\Libraries\FleetsLib::getFleetShipsArray($fleet['fleet_array']);
+            if (isset($fleetShips[210]) && $fleetShips[210] > 0) {
+                $depletionPct = $this->expeditionService->getDepletionPercent($expGalaxy, $expSystem);
+                $this->expeditionMessage(
+                    (int) $fleet['fleet_owner'],
+                    sprintf('System %d:%d depletion level: %d%%', $expGalaxy, $expSystem, $depletionPct),
+                    (int) $fleet['fleet_end_stay'],
+                    ['galaxy' => $expGalaxy, 'system' => $expSystem, 'planet' => $fleet['fleet_end_planet']]
+                );
+            }
+
+            switch ($this->expeditionService->getExpeditionResultFromDeck((int) $fleet['fleet_owner'], $expGalaxy, $expSystem)) {
                 case 'darkMatter':
                     $this->resultDarkMatter($fleet);
                     break;
@@ -47,12 +65,10 @@ class Expedition extends Missions
                     $this->resultResources($fleet);
                     break;
                 case 'pirates':
-                    //$this->resultPirates($fleet);
-                    $this->resultNothing($fleet);
+                    $this->resultPirates($fleet);
                     break;
                 case 'aliens':
-                    //$this->resultAliens($fleet);
-                    $this->resultNothing($fleet);
+                    $this->resultAliens($fleet);
                     break;
                 case 'delay':
                     $this->resultDelay($fleet);
@@ -142,6 +158,8 @@ class Expedition extends Missions
                 ) * $count;
             }
 
+            $this->fleetTotalValue += ($price->getMetal() + $price->getCrystal() + $price->getDeuterium()) * $count;
+
             $this->fleetCapacity += app(FleetsService::class)->getMaxStorage(
                 $ship->getCapacity(),
                 (int) $fleet['research_hyperspace_technology']
@@ -188,13 +206,20 @@ class Expedition extends Missions
      */
     private function resultDarkMatter(array $fleet): void
     {
-        $darkMatterFound = $this->expeditionService->getDarkMatterSourceSize(
+        $stayDuration = max(0, (int) $fleet['fleet_end_stay'] - (int) $fleet['fleet_start_time']);
+        $durationMultiplier = $this->getDurationMultiplier($stayDuration);
+        $darkMatterFound = (int) ($this->expeditionService->getDarkMatterSourceSize(
             $this->expeditionService->calculateDarkMatterSourceSize()
+        ) * $durationMultiplier);
+
+        $message = sprintf(
+            __('game/expedition.exp_dm_' . mt_rand(1, 5)),
+            $this->formatService->prettyNumber($darkMatterFound)
         );
 
         $this->expeditionMessage(
             (int) $fleet['fleet_owner'],
-            __('game/expedition.exp_dm_' . mt_rand(1, 5)),
+            $message,
             (int) $fleet['fleet_end_stay'],
             [
                 'galaxy' => $fleet['fleet_end_galaxy'],
@@ -213,50 +238,101 @@ class Expedition extends Missions
      */
     private function resultShips(array $fleet): void
     {
-        $shipsRatio = $this->expeditionService->getShipsObtainableChances();
-        $foundChance = $this->shipExpeditionPoints / $fleet['fleet_amount'];
         $currentFleet = FleetsLib::getFleetShipsArray($fleet['fleet_array']);
-        $foundShip = [];
-
-        for ($ship = 202; $ship <= 215; $ship++) {
-            if (isset($currentFleet[$ship]) && $currentFleet[$ship] != 0) {
-                $foundShip[$ship] = round($currentFleet[$ship] * $shipsRatio[$ship] * $foundChance) + 1;
-
-                if ($foundShip[$ship] > 0) {
-                    $currentFleet[$ship] += $foundShip[$ship];
-                }
+        $possibleShips = $this->expeditionService->getPossibleShips();
+        
+        $eligibleShips = [];
+        $totalEligibleCount = 0;
+        
+        foreach ($currentFleet as $shipId => $count) {
+            if ($count > 0 && in_array((int)$shipId, $possibleShips, true)) {
+                $eligibleShips[$shipId] = $count;
+                $totalEligibleCount += $count;
             }
+        }
+        
+        if (empty($eligibleShips) || $totalEligibleCount === 0) {
+            $this->resultNothing($fleet);
+            return;
+        }
+
+        // Determine tier percentages based on total eligible ship count
+        if ($totalEligibleCount <= 100) {
+            $minPct = 10;
+            $maxPct = 100;
+        } elseif ($totalEligibleCount <= 1000) {
+            $minPct = 10;
+            $maxPct = 50;
+        } elseif ($totalEligibleCount <= 10000) {
+            $minPct = 5;
+            $maxPct = 30;
+        } else {
+            $minPct = 3;
+            $maxPct = 20;
+        }
+        
+        $rollPercent = mt_rand($minPct, $maxPct);
+        
+        $stayDuration = max(0, (int) $fleet['fleet_end_stay'] - (int) $fleet['fleet_start_time']);
+        $durationMultiplier = $this->getDurationMultiplier($stayDuration);
+        
+        $finalMultiplier = ($rollPercent / 100.0) * $durationMultiplier;
+        
+        $foundShip = [];
+        $totalFound = 0;
+        
+        foreach ($eligibleShips as $shipId => $count) {
+            // Fractional probability: e.g., 1.4 ships = 1 guaranteed, 40% chance of a 2nd
+            $exactAmount = $count * $finalMultiplier;
+            $guaranteed = (int) floor($exactAmount);
+            $fraction = $exactAmount - $guaranteed;
+            
+            if ($fraction > 0 && mt_rand(1, 10000) <= (int) ($fraction * 10000)) {
+                $guaranteed++;
+            }
+            
+            if ($guaranteed > 0) {
+                $foundShip[$shipId] = $guaranteed;
+                $totalFound += $guaranteed;
+            }
+        }
+        
+        if ($totalFound === 0) {
+            $this->resultNothing($fleet);
+            return;
+        }
+
+        foreach ($foundShip as $shipId => $count) {
+            $currentFleet[$shipId] += $count;
         }
 
         $newShips = [];
         $found_ship_message = '';
-
+        
         foreach ($currentFleet as $ship => $count) {
             if ($count > 0) {
                 $newShips[$ship] = $count;
             }
         }
-
-        if ($foundShip != null) {
-            foreach ($foundShip as $ship => $count) {
-                if ($count != 0) {
-                    $found_ship_message .= __('game/ships.' . $this->resource[$ship]) . ': ' . $count . '<br>';
-                }
+        
+        foreach ($foundShip as $ship => $count) {
+            if ($count > 0) {
+                $found_ship_message .= __('game/ships.' . $this->resource[$ship]) . ': ' . $this->formatService->prettyNumber($count) . '<br>';
             }
         }
-
+        
         $this->updateFleetArrayById([
             'ships' => FleetsLib::setFleetShipsArray($newShips),
             'fleet_id' => $fleet['fleet_id'],
         ]);
 
         $message = sprintf(
-            __('game/expedition.exp_new_ships_' . mt_rand(1, 5)),
+            __('game/expedition.exp_new_ships_' . mt_rand(1, 7)),
             $found_ship_message
         );
 
         $this->expeditionMessage(
-            $fleet['fleet_owner'],
+            (int) $fleet['fleet_owner'],
             $message,
             (int) $fleet['fleet_end_stay'],
             [
@@ -273,15 +349,23 @@ class Expedition extends Missions
         $fleetUsedStorage = $fleet['fleet_resource_metal'] + $fleet['fleet_resource_crystal'] + $fleet['fleet_resource_deuterium'];
         $fleetMaxCapacity = $this->fleetCapacity - $fleetUsedStorage;
 
-        // expedition resources obtained calculations
+        // New: fleet-value-based resource calculation
         $typeObtained = $this->expeditionService->calculateResourceTypeObtained();
-        $foundAmount = $this->expeditionService->getResourceFoundAmount(
-            $this->expeditionService->getResourceSourceSizeMultChances(
-                $typeObtained
-            ),
-            $this->resourceExpeditionPoints,
-            $typeObtained
-        );
+
+        [$minPct, $maxPct] = $this->expeditionService->getFleetResourceTier($this->fleetTotalValue);
+        $rollPercent = mt_rand($minPct, $maxPct);
+
+        $resourceDivider = match ($typeObtained) {
+            'metal' => 1,
+            'crystal' => 2,
+            'deuterium' => 3,
+        };
+
+        $foundAmount = (int) floor(($this->fleetTotalValue * $rollPercent / 100) / $resourceDivider);
+
+        $stayDuration = max(0, (int) $fleet['fleet_end_stay'] - (int) $fleet['fleet_start_time']);
+        $durationMultiplier = $this->getDurationMultiplier($stayDuration);
+        $foundAmount = (int) ($foundAmount * $durationMultiplier);
 
         if ($foundAmount > $fleetMaxCapacity) {
             $fillFleetStorage = $fleetMaxCapacity;
@@ -295,9 +379,15 @@ class Expedition extends Missions
             $fillFleetStorage
         );
 
+        $message = sprintf(
+            __('game/expedition.exp_new_resources_' . mt_rand(1, 4)),
+            $this->formatService->prettyNumber($fillFleetStorage),
+            __('game/resources.' . strtolower($typeObtained))
+        );
+
         $this->expeditionMessage(
             (int) $fleet['fleet_owner'],
-            __('game/expedition.exp_new_resources_' . mt_rand(1, 4)),
+            $message,
             (int) $fleet['fleet_end_stay'],
             [
                 'galaxy' => $fleet['fleet_end_galaxy'],
@@ -310,17 +400,116 @@ class Expedition extends Missions
     }
 
     /**
-     * @todo implement
+     * Handle abstract pirate combat (fleet loss)
      */
     private function resultPirates(array $fleet): void
     {
+        $roll = mt_rand(1, 100);
+        if ($roll <= 89) {
+            $lossPercent = mt_rand(5, 15) / 100; // Normal: 5-15%
+        } elseif ($roll <= 99) {
+            $lossPercent = mt_rand(15, 30) / 100; // Large: 15-30%
+        } else {
+            $lossPercent = mt_rand(30, 50) / 100; // XL: 30-50%
+        }
+
+        $this->applyCombatLoss($fleet, $lossPercent, 'Pirates');
     }
 
     /**
-     * @todo implement
+     * Handle abstract alien combat (fleet loss)
      */
     private function resultAliens(array $fleet): void
     {
+        $roll = mt_rand(1, 100);
+        if ($roll <= 89) {
+            $lossPercent = mt_rand(10, 25) / 100; // Normal: 10-25%
+        } elseif ($roll <= 99) {
+            $lossPercent = mt_rand(25, 50) / 100; // Large: 25-50%
+        } else {
+            $lossPercent = mt_rand(50, 80) / 100; // XL: 50-80%
+        }
+
+        $this->applyCombatLoss($fleet, $lossPercent, 'Aliens');
+    }
+
+    /**
+     * Helper to apply abstract combat loss
+     */
+    private function applyCombatLoss(array $fleet, float $lossPercent, string $enemyType): void
+    {
+        $currentFleet = FleetsLib::getFleetShipsArray($fleet['fleet_array']);
+        $newShips = [];
+        $lostShips = [];
+        $survivingCount = 0;
+
+        foreach ($currentFleet as $ship => $count) {
+            if ($count > 0) {
+                // Ensure at least some survive if it's not a full wipe, but handle rounding
+                $surviving = (int) floor($count * (1.0 - $lossPercent));
+                $lost = $count - $surviving;
+
+                if ($surviving > 0) {
+                    $newShips[$ship] = $surviving;
+                    $survivingCount += $surviving;
+                }
+                
+                if ($lost > 0) {
+                    $lostShips[$ship] = $lost;
+                }
+            }
+        }
+
+        if ($survivingCount > 0) {
+            $message = sprintf(
+                "Your expedition was ambushed by %s! You suffered a %d%% fleet loss but managed to escape.",
+                $enemyType,
+                (int)($lossPercent * 100)
+            );
+
+            $this->expeditionMessage(
+                $fleet['fleet_owner'],
+                $message,
+                (int) $fleet['fleet_end_stay'],
+                [
+                    'galaxy' => $fleet['fleet_end_galaxy'],
+                    'system' => $fleet['fleet_end_system'],
+                    'planet' => $fleet['fleet_end_planet'],
+                ]
+            );
+
+            if (!empty($lostShips)) {
+                $this->updateLostShipsAndDefensePoints($fleet['fleet_owner'], $lostShips);
+            }
+
+            $this->updateFleetArrayById([
+                'ships' => FleetsLib::setFleetShipsArray($newShips),
+                'fleet_id' => $fleet['fleet_id'],
+            ]);
+        } else {
+            // Entire fleet wiped out
+            $message = sprintf(
+                "Your expedition was ambushed and completely destroyed by %s!",
+                $enemyType
+            );
+
+            $this->expeditionMessage(
+                $fleet['fleet_owner'],
+                $message,
+                (int) $fleet['fleet_end_stay'],
+                [
+                    'galaxy' => $fleet['fleet_end_galaxy'],
+                    'system' => $fleet['fleet_end_system'],
+                    'planet' => $fleet['fleet_end_planet'],
+                ]
+            );
+
+            $this->updateLostShipsAndDefensePoints(
+                $fleet['fleet_owner'],
+                $currentFleet
+            );
+            parent::removeFleet($fleet['fleet_id']);
+        }
     }
 
     /**
@@ -490,5 +679,16 @@ class Expedition extends Missions
             $subject,
             $message
         );
+    }
+
+    /**
+     * Get a multiplier based on how many hours the fleet stayed.
+     * Adjusted to scale from 1.0x at 1 hour to 3.0x at 8 hours.
+     * Formula: 1 + (hours - 1) * (2 / 7)
+     */
+    private function getDurationMultiplier(int $staySeconds): float
+    {
+        $hours = max(1, round($staySeconds / 3600));
+        return 1.0 + ($hours - 1) * (2 / 7);
     }
 }

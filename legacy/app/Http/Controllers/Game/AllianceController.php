@@ -1012,7 +1012,7 @@ class AllianceController extends BaseController
         if (isset($post['id'])) {
             foreach ($post['id'] as $id) {
                 $ranks->editRankById(
-                    $id,
+                    (int) $id,
                     [
                         AllianceRanks::DELETE => (isset($post['u' . $id . 'r1']) && $this->alliance->isOwner()) ? SwitchInt::on : SwitchInt::off,
                         AllianceRanks::KICK => isset($post['u' . $id . 'r2']) ? SwitchInt::on : SwitchInt::off,

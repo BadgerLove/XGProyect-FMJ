@@ -53,6 +53,7 @@
                 </table>
             </form>
             <form name="trade-resources" method="POST" action="" role="form">
+                <input type="hidden" name="action" value="call_merchant">
                 <table width="100%">
                     <tr>
                         <td class="c" colspan="2">{{ __('game/trader.tr_merchant2_tab_title') }}</td>
@@ -86,15 +87,15 @@
                                 </tr>
                                 <tr>
                                     <th>
-                                        <a title="Sell your Metal and get Crystal or Deuterium. Costs: 3.500 Dark Matter">Metal</a>
+                                        <a title="Sell your Metal and get Crystal or Deuterium. Costs: 3,500 Dark Matter">Metal</a>
                                         <input type="radio" name="sell" value="metal">
                                     </th>
                                     <th>
-                                        <a title="Sell your Crystal and get Metal or Deuterium. Costs: 3.500 Dark Matter">Crystal</a>
+                                        <a title="Sell your Crystal and get Metal or Deuterium. Costs: 3,500 Dark Matter">Crystal</a>
                                         <input type="radio" name="sell" value="crystal">
                                     </th>
                                     <th>
-                                        <a title="Sell your Deuterium and get Metal or Crystal. Costs: 3.500 Dark Matter">Deuterium</a>
+                                        <a title="Sell your Deuterium and get Metal or Crystal. Costs: 3,500 Dark Matter">Deuterium</a>
                                         <input type="radio" name="sell" value="deuterium">
                                     </th>
                                 </tr>
@@ -102,7 +103,7 @@
                         </th>
                         <th width="50%">
                             {{ __('game/trader.tr_price') }}<br>
-                            <input type="button" value="{{ __('game/trader.tr_call_button') }}">
+                            <input type="submit" value="{{ __('game/trader.tr_call_button') }}">
                         </th>
                     </tr>
                 </table>

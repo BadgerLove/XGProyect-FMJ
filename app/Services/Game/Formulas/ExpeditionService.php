@@ -58,9 +58,17 @@ class ExpeditionService
         return ($structuralIntegrity * 5 / 1000);
     }
 
-    public function getExpeditionResult(): string
+    public function getExpeditionResult(int $galaxy = 0, int $system = 0): string
     {
-        return $this->pickWeighted($this->getExpeditionResultWeights(), 'nothing');
+        $weights = $this->getExpeditionResultWeights();
+
+        // Apply depletion: boost "nothing" chance for depleted systems
+        if ($galaxy > 0 && $system > 0) {
+            $boost = $this->getDepletionNothingBoost($galaxy, $system);
+            $weights['nothing'] = ($weights['nothing'] ?? 0) + $boost;
+        }
+
+        return $this->pickWeighted($weights, 'nothing');
     }
 
     public function calculateDarkMatterSourceSize(): string
@@ -71,14 +79,14 @@ class ExpeditionService
     public function getDarkMatterSourceSize(string $discoveryType): int
     {
         if ($discoveryType === 'medium') {
-            return mt_rand(500, 700);
+            return mt_rand(80000, 150000);
         }
 
         if ($discoveryType === 'large') {
-            return mt_rand(1000, 1800);
+            return mt_rand(200000, 500000);
         }
 
-        return mt_rand(300, 400); // $discoveryType === 'small'
+        return mt_rand(30000, 50000); // $discoveryType === 'small'
     }
 
     public function calculateResourceTypeObtained(): string
@@ -246,5 +254,301 @@ class ExpeditionService
         }
 
         return $fallback;
+    }
+
+    // ─── Deck System (Per-Player Shuffled Deck) ───
+
+    /** Deck size — higher = more accurate distribution */
+    private const DECK_SIZE = 1000;
+
+    /**
+     * Get the expedition result using the per-player deck system.
+     * Deals the next card from the player's shuffled deck.
+     * Depletion can override a positive outcome to "nothing".
+     */
+    public function getExpeditionResultFromDeck(int $userId, int $galaxy = 0, int $system = 0): string
+    {
+        $deck = $this->getPlayerDeck($userId);
+        $outcome = $deck['deck'][$deck['pointer']];
+
+        // Advance pointer
+        $newPointer = $deck['pointer'] + 1;
+
+        // Reshuffle when deck is exhausted
+        if ($newPointer >= self::DECK_SIZE) {
+            $this->rebuildDeck($userId);
+        } else {
+            \Illuminate\Support\Facades\DB::table('expedition_deck')
+                ->where('user_id', $userId)
+                ->update(['pointer' => $newPointer, 'updated_at' => now()]);
+        }
+
+        // Apply depletion override: depleted systems can convert positive outcomes to nothing
+        if ($galaxy > 0 && $system > 0 && $outcome !== 'nothing') {
+            $boost = $this->getDepletionNothingBoost($galaxy, $system);
+            if ($boost > 0) {
+                $totalWeight = array_sum($this->getExpeditionResultWeights());
+                $overrideChance = $boost / ($totalWeight + $boost);
+                if (mt_rand(1, 10000) <= (int) ($overrideChance * 10000)) {
+                    $outcome = 'nothing';
+                }
+            }
+        }
+
+        return $outcome;
+    }
+
+    /**
+     * Get or create a player's expedition deck.
+     */
+    private function getPlayerDeck(int $userId): array
+    {
+        $row = \Illuminate\Support\Facades\DB::table('expedition_deck')
+            ->where('user_id', $userId)
+            ->first();
+
+        if (!$row) {
+            return $this->createDeck($userId);
+        }
+
+        // Check if admin weights changed since deck was built
+        $currentWeights = $this->getExpeditionResultWeights();
+        $storedWeights = json_decode($row->weights ?? '{}', true);
+
+        if ($currentWeights !== $storedWeights) {
+            return $this->rebuildDeck($userId);
+        }
+
+        return [
+            'deck' => json_decode($row->deck, true),
+            'pointer' => $row->pointer,
+        ];
+    }
+
+    /**
+     * Create a fresh deck for a player based on current admin weights.
+     */
+    private function createDeck(int $userId): array
+    {
+        $deck = $this->buildDeck();
+
+        \Illuminate\Support\Facades\DB::table('expedition_deck')->updateOrInsert(
+            ['user_id' => $userId],
+            [
+                'deck' => json_encode($deck),
+                'pointer' => 0,
+                'weights' => json_encode($this->getExpeditionResultWeights()),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]
+        );
+
+        return ['deck' => $deck, 'pointer' => 0];
+    }
+
+    /**
+     * Rebuild (reshuffle) a player's deck.
+     */
+    private function rebuildDeck(int $userId): array
+    {
+        $deck = $this->buildDeck();
+
+        \Illuminate\Support\Facades\DB::table('expedition_deck')
+            ->where('user_id', $userId)
+            ->update([
+                'deck' => json_encode($deck),
+                'pointer' => 0,
+                'weights' => json_encode($this->getExpeditionResultWeights()),
+                'updated_at' => now(),
+            ]);
+
+        return ['deck' => $deck, 'pointer' => 0];
+    }
+
+    /**
+     * Build a shuffled deck of outcome strings based on current weights.
+     * Uses DECK_SIZE cards for accurate distribution.
+     *
+     * @return string[] Shuffled array of outcome names
+     */
+    private function buildDeck(): array
+    {
+        $weights = $this->getExpeditionResultWeights();
+        $totalWeight = array_sum($weights);
+        $deck = [];
+
+        // Convert weights to card counts
+        $cardCounts = [];
+        $assigned = 0;
+        $i = 0;
+        $weightKeys = array_keys($weights);
+
+        foreach ($weights as $outcome => $weight) {
+            $i++;
+            if ($i === count($weights)) {
+                // Last outcome gets the remainder to ensure exact DECK_SIZE
+                // max(0) prevents negative counts in rare rounding edge cases
+                $cardCounts[$outcome] = max(0, self::DECK_SIZE - $assigned);
+            } else {
+                $count = (int) round($weight / $totalWeight * self::DECK_SIZE);
+                $cardCounts[$outcome] = $count;
+                $assigned += $count;
+            }
+        }
+
+        // Build the deck array
+        foreach ($cardCounts as $outcome => $count) {
+            for ($j = 0; $j < $count; $j++) {
+                $deck[] = $outcome;
+            }
+        }
+
+        // Shuffle using Fisher-Yates
+        for ($j = count($deck) - 1; $j > 0; $j--) {
+            $k = mt_rand(0, $j);
+            [$deck[$j], $deck[$k]] = [$deck[$k], $deck[$j]];
+        }
+
+        return $deck;
+    }
+
+    // ─── System Depletion ───
+
+    /** How many expeditions before a system is fully depleted */
+    private const DEPLETION_THRESHOLD = 20;
+
+    /** How many expeditions recover per hour */
+    private const RECOVERY_RATE = 2;
+
+    /**
+     * Record an expedition in a system.
+     */
+    public function recordExpedition(int $galaxy, int $system): void
+    {
+        $now = now();
+
+        // Apply recovery first
+        $this->applyRecovery($galaxy, $system);
+
+        $activity = \Illuminate\Support\Facades\DB::table('expedition_activity')
+            ->where('galaxy', $galaxy)
+            ->where('system', $system)
+            ->first();
+
+        if ($activity) {
+            \Illuminate\Support\Facades\DB::table('expedition_activity')
+                ->where('id', $activity->id)
+                ->update([
+                    'expedition_count' => $activity->expedition_count + 1,
+                    'last_expedition' => $now,
+                    'updated_at' => $now,
+                ]);
+        } else {
+            \Illuminate\Support\Facades\DB::table('expedition_activity')->insert([
+                'galaxy' => $galaxy,
+                'system' => $system,
+                'expedition_count' => 1,
+                'last_expedition' => $now,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+        }
+    }
+
+    /**
+     * Get the depletion multiplier for a system (1.0 = no depletion, 0.0 = fully depleted).
+     * This multiplies the chance of getting a positive result.
+     */
+    public function getDepletionMultiplier(int $galaxy, int $system): float
+    {
+        $this->applyRecovery($galaxy, $system);
+
+        $activity = \Illuminate\Support\Facades\DB::table('expedition_activity')
+            ->where('galaxy', $galaxy)
+            ->where('system', $system)
+            ->first();
+
+        if (!$activity) {
+            return 1.0; // No activity = no depletion
+        }
+
+        $count = $activity->expedition_count;
+
+        if ($count <= 0) {
+            return 1.0;
+        }
+
+        // Linear depletion: each expedition reduces yield by (1 / THRESHOLD)
+        $depletion = min($count / self::DEPLETION_THRESHOLD, 1.0);
+
+        // Return multiplier (1.0 at 0 expeditions, 0.5 at threshold)
+        // We don't go to 0.0 — minimum 50% yield even when depleted
+        return max(1.0 - ($depletion * 0.5), 0.5);
+    }
+
+    /**
+     * Get depletion level as a percentage (0-100).
+     * For display to players (probe reports).
+     */
+    public function getDepletionPercent(int $galaxy, int $system): int
+    {
+        $this->applyRecovery($galaxy, $system);
+
+        $activity = \Illuminate\Support\Facades\DB::table('expedition_activity')
+            ->where('galaxy', $galaxy)
+            ->where('system', $system)
+            ->first();
+
+        if (!$activity) {
+            return 0;
+        }
+
+        return (int) min(($activity->expedition_count / self::DEPLETION_THRESHOLD) * 100, 100);
+    }
+
+    /**
+     * Get the "nothing" weight boost from depletion.
+     * Depleted systems have higher chance of "nothing" results.
+     */
+    public function getDepletionNothingBoost(int $galaxy, int $system): int
+    {
+        $depletion = 1.0 - $this->getDepletionMultiplier($galaxy, $system);
+
+        // At full depletion, add up to 2000 to "nothing" weight (out of 10000 total)
+        return (int) ($depletion * 2000);
+    }
+
+    /**
+     * Apply recovery to a system (reduce expedition_count based on time elapsed).
+     */
+    private function applyRecovery(int $galaxy, int $system): void
+    {
+        $activity = \Illuminate\Support\Facades\DB::table('expedition_activity')
+            ->where('galaxy', $galaxy)
+            ->where('system', $system)
+            ->first();
+
+        if (!$activity || $activity->expedition_count <= 0) {
+            return;
+        }
+
+        $lastExpedition = \Carbon\Carbon::parse($activity->last_expedition);
+        $hoursElapsed = $lastExpedition->diffInHours(now());
+
+        if ($hoursElapsed <= 0) {
+            return;
+        }
+
+        $recovered = (int) ($hoursElapsed * self::RECOVERY_RATE);
+        $newCount = max(0, $activity->expedition_count - $recovered);
+
+        if ($newCount !== $activity->expedition_count) {
+            \Illuminate\Support\Facades\DB::table('expedition_activity')
+                ->where('id', $activity->id)
+                ->update([
+                    'expedition_count' => $newCount,
+                    'updated_at' => now(),
+                ]);
+        }
     }
 }
