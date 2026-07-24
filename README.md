@@ -46,6 +46,17 @@ Full responsive design for all game pages. Purely additive — desktop is comple
 
 Single file: `public/assets/css/mobile.css`
 
+### ⚔️ Battle Simulator
+
+Full in-game battle simulator accessible from the sidebar. Uses the OPBE battle engine under the hood.
+
+- Configure attacker ships, research levels (weapons/shielding/armour)
+- Configure defender ships, defenses, research levels, and resource stockpile
+- Runs the actual battle engine with all 6 combat rounds
+- Returns detailed results: fleet losses, debris field, loot, winner
+- Can be pre-filled from espionage reports
+- Available at `/game/battle-simulator`
+
 ### 🛒 Merchant Exchange
 
 Resource-to-resource trading via the trader page.
