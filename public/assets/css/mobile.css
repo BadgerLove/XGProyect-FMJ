@@ -738,6 +738,7 @@
     /* Override scroll wrapper for card mode */
     .fleet-movement-scroll {
         overflow: visible !important;
+        outline: 3px dashed yellow !important;
     }
 
     /* Table base */
