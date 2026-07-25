@@ -102,7 +102,7 @@ class Spy extends Missions
                     $AttackLink .= ' ">' . __('game/missions.type_mission')[MissionsEnumerator::ATTACK] . '';
                     $AttackLink .= '</a>';
                     $AttackLink .= ' &middot; ';
-                    $AttackLink .= '<a href="' . $this->buildSimulatorUrl($target_data) . '">' . __('game/spy.spy_simulate') . '</a>';
+                    $AttackLink .= '<a href="' . $this->buildSimulatorUrl($target_data, $current_data) . '">' . __('game/spy.spy_simulate') . '</a>';
                     $AttackLink .= '</center>';
                     $MessageEnd = '<center>' . sprintf(__('game/spy.spy_report_detection'), $TargetChances) . '</center>';
 
@@ -278,7 +278,7 @@ class Spy extends Missions
         return $return;
     }
 
-    private function buildSimulatorUrl(array $target_data): string
+    private function buildSimulatorUrl(array $target_data, array $current_data = []): string
     {
         $params = ['page' => 'battlesimulator'];
 
@@ -296,10 +296,17 @@ class Spy extends Missions
             }
         }
 
-        // Research levels
+        // Defender research levels
         foreach (['research_weapons_technology' => 'def_weapons', 'research_shielding_technology' => 'def_shielding', 'research_armour_technology' => 'def_armour'] as $dbKey => $paramKey) {
             if (($target_data[$dbKey] ?? 0) > 0) {
                 $params[$paramKey] = $target_data[$dbKey];
+            }
+        }
+
+        // Attacker research levels (the player doing the scan)
+        foreach (['research_weapons_technology' => 'atk_weapons', 'research_shielding_technology' => 'atk_shielding', 'research_armour_technology' => 'atk_armour'] as $dbKey => $paramKey) {
+            if (($current_data[$dbKey] ?? 0) > 0) {
+                $params[$paramKey] = $current_data[$dbKey];
             }
         }
 

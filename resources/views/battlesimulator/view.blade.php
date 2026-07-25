@@ -136,6 +136,9 @@
     .result-stat .value { color: #E6EBFB; font-weight: bold; }
     .result-stat .value.loss { color: #f44336; }
     .result-stat .value.win { color: #4CAF50; }
+    .cost-total { margin-top: 12px; padding-top: 8px; border-top: 1px solid #415680; }
+    .cost-total .label { color: #848484; font-size: 13px; }
+    .cost-total .value { color: #E6EBFB; font-weight: bold; font-size: 13px; }
     .loot-box {
         background: #1b2a1b;
         border: 1px solid #4CAF50;
@@ -155,6 +158,37 @@
         font-style: italic;
         margin: 8px 0;
     }
+    .detail-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+        margin-top: 8px;
+    }
+    .detail-table th {
+        text-align: left;
+        color: #848484;
+        font-weight: normal;
+        padding: 4px 8px;
+        border-bottom: 1px solid #415680;
+        font-size: 11px;
+    }
+    .detail-table th.num { text-align: right; }
+    .detail-table td {
+        padding: 3px 8px;
+        border-bottom: 1px solid #0d1b2a;
+        color: #E6EBFB;
+    }
+    .detail-table td.num { text-align: right; font-weight: bold; }
+    .detail-table td.lost { color: #f44336; }
+    .detail-table td.survived { color: #4CAF50; }
+    .detail-table td.destroyed { color: #f44336; }
+    .detail-table tr:hover { background: rgba(65,86,128,0.15); }
+    .result-cost {
+        font-size: 10px;
+        color: #848484;
+        display: block;
+        margin-top: 1px;
+    }
 </style>
 
 <div class="sim-container">
@@ -171,22 +205,22 @@
                 ] as $id => $name)
                 <div class="sim-field">
                     <label for="atk_{{ $id }}">{{ $name }}</label>
-                    <input type="number" id="atk_{{ $id }}" name="attacker_ships[{{ $id }}]" value="0" min="0">
+                    <input type="number" id="atk_{{ $id }}" name="attacker_ships[{{ $id }}]" value="" min="0" placeholder="0">
                 </div>
                 @endforeach
             </div>
             <div class="sim-research-grid" style="margin-top:12px;">
                 <div class="sim-research-field">
                     <label>Weapons Tech</label>
-                    <input type="number" id="atk_weapons" name="attacker_weapons" value="0" min="0" max="30">
+                    <input type="number" id="atk_weapons" name="attacker_weapons" value="" min="0" max="30" placeholder="0">
                 </div>
                 <div class="sim-research-field">
                     <label>Shielding Tech</label>
-                    <input type="number" id="atk_shielding" name="attacker_shielding" value="0" min="0" max="30">
+                    <input type="number" id="atk_shielding" name="attacker_shielding" value="" min="0" max="30" placeholder="0">
                 </div>
                 <div class="sim-research-field">
                     <label>Armour Tech</label>
-                    <input type="number" id="atk_armour" name="attacker_armour" value="0" min="0" max="30">
+                    <input type="number" id="atk_armour" name="attacker_armour" value="" min="0" max="30" placeholder="0">
                 </div>
             </div>
         </div>
@@ -203,7 +237,7 @@
                 ] as $id => $name)
                 <div class="sim-field">
                     <label for="def_{{ $id }}">{{ $name }}</label>
-                    <input type="number" id="def_{{ $id }}" name="defender_ships[{{ $id }}]" value="0" min="0">
+                    <input type="number" id="def_{{ $id }}" name="defender_ships[{{ $id }}]" value="" min="0" placeholder="0">
                 </div>
                 @endforeach
             </div>
@@ -216,22 +250,22 @@
                 ] as $id => $name)
                 <div class="sim-field">
                     <label for="defd_{{ $id }}">{{ $name }}</label>
-                    <input type="number" id="defd_{{ $id }}" name="defender_defenses[{{ $id }}]" value="0" min="0">
+                    <input type="number" id="defd_{{ $id }}" name="defender_defenses[{{ $id }}]" value="" min="0" placeholder="0">
                 </div>
                 @endforeach
             </div>
             <div class="sim-research-grid" style="margin-top:12px;">
                 <div class="sim-research-field">
                     <label>Weapons Tech</label>
-                    <input type="number" id="def_weapons" name="defender_weapons" value="0" min="0" max="30">
+                    <input type="number" id="def_weapons" name="defender_weapons" value="" min="0" max="30" placeholder="0">
                 </div>
                 <div class="sim-research-field">
                     <label>Shielding Tech</label>
-                    <input type="number" id="def_shielding" name="defender_shielding" value="0" min="0" max="30">
+                    <input type="number" id="def_shielding" name="defender_shielding" value="" min="0" max="30" placeholder="0">
                 </div>
                 <div class="sim-research-field">
                     <label>Armour Tech</label>
-                    <input type="number" id="def_armour" name="defender_armour" value="0" min="0" max="30">
+                    <input type="number" id="def_armour" name="defender_armour" value="" min="0" max="30" placeholder="0">
                 </div>
             </div>
             <h3 style="margin-top:12px;">Resources (for loot estimate)</h3>
@@ -239,15 +273,15 @@
             <div class="sim-resources-grid">
                 <div class="sim-research-field">
                     <label>Metal</label>
-                    <input type="number" id="def_metal" name="defender_metal" value="0" min="0">
+                    <input type="number" id="def_metal" name="defender_metal" value="" min="0" placeholder="0">
                 </div>
                 <div class="sim-research-field">
                     <label>Crystal</label>
-                    <input type="number" id="def_crystal" name="defender_crystal" value="0" min="0">
+                    <input type="number" id="def_crystal" name="defender_crystal" value="" min="0" placeholder="0">
                 </div>
                 <div class="sim-research-field">
                     <label>Deuterium</label>
-                    <input type="number" id="def_deuterium" name="defender_deuterium" value="0" min="0">
+                    <input type="number" id="def_deuterium" name="defender_deuterium" value="" min="0" placeholder="0">
                 </div>
             </div>
         </div>
@@ -260,16 +294,18 @@
         <div id="resultBanner" class="result-banner"></div>
         <div class="result-grid">
             <div class="result-box">
-                <h4 style="color:#4CAF50;">⚔️ Attacker</h4>
-                <div id="attackerStats"></div>
+                <h4 style="color:#4CAF50;">⚔️ Attacker Fleet</h4>
+                <div id="attackerDetail"></div>
+                <div id="attackerTotals"></div>
             </div>
             <div class="result-box">
                 <h4 style="color:#f44336;">🛡️ Defender</h4>
-                <div id="defenderStats"></div>
+                <div id="defenderDetail"></div>
+                <div id="defenderTotals"></div>
             </div>
         </div>
         <div id="lootBox" class="loot-box" style="display:none;">
-            <h4>💰 Estimated Loot</h4>
+            <h4>💰 Loot &amp; Aftermath</h4>
             <div id="lootStats"></div>
         </div>
     </div>
@@ -378,6 +414,20 @@ function runSimulation(e) {
     });
 }
 
+// Ship/defense name lookup
+var SHIP_NAMES = {
+    202: 'Small Cargo', 203: 'Large Cargo', 204: 'Light Fighter',
+    205: 'Heavy Fighter', 206: 'Cruiser', 207: 'Battleship',
+    208: 'Colony Ship', 209: 'Recycler', 210: 'Espionage Probe',
+    211: 'Bomber', 212: 'Solar Satellite', 213: 'Destroyer',
+    214: 'Deathstar', 215: 'Reaper'
+};
+var DEFENSE_NAMES = {
+    401: 'Rocket Launcher', 402: 'Light Laser', 403: 'Heavy Laser',
+    404: 'Gauss Cannon', 405: 'Ion Cannon', 406: 'Plasma Turret',
+    502: 'Small Shield Dome', 503: 'Large Shield Dome'
+};
+
 function showResults(result, data) {
     var resultsDiv = document.getElementById('simResults');
     resultsDiv.style.display = 'block';
@@ -395,36 +445,83 @@ function showResults(result, data) {
         banner.textContent = '🤝 Draw — Both Destroyed';
     }
 
-    // Calculate totals
-    var attackerTotal = 0;
-    Object.values(data.attacker_ships).forEach(function(v) { attackerTotal += v; });
-    var defenderTotal = 0;
-    Object.values(data.defender_ships).forEach(function(v) { defenderTotal += v; });
-    Object.values(data.defender_defenses).forEach(function(v) { defenderTotal += v; });
+    // --- Attacker fleet detail table ---
+    var atkDetail = result.attacker_ships_detail || {};
+    var atkTotalInitial = 0, atkTotalFinal = 0;
+    var atkHtml = buildDetailTable(atkDetail, SHIP_NAMES, 'attacker_ships_detail');
 
-    var attackerLossPct = attackerTotal > 0 ? Math.round((result.attacker_losses / attackerTotal) * 100) : 0;
-    var defenderLossPct = defenderTotal > 0 ? Math.round((result.defender_losses / defenderTotal) * 100) : 0;
+    // Attacker loss %
+    if (atkTotalInitial > 0) {
+        var atkLossPct = Math.round(((atkTotalInitial - atkTotalFinal) / atkTotalInitial) * 100);
+    } else {
+        var atkLossPct = 0;
+    }
 
-    // Attacker stats
-    document.getElementById('attackerStats').innerHTML =
-        '<div class="result-stat"><span class="label">Units Lost</span><span class="value loss">' + formatNum(result.attacker_losses) + '</span></div>' +
-        '<div class="result-stat"><span class="label">Losses</span><span class="value loss">' + attackerLossPct + '%</span></div>' +
-        '<div class="result-stat"><span class="label">Units Remaining</span><span class="value win">' + formatNum(result.attacker_ships_remaining) + '</span></div>';
+    // Calculate total lost costs
+    var atkMetalLost = 0, atkCrystalLost = 0;
+    var atkCosts = result.attacker_lost_costs || {};
+    Object.values(atkCosts).forEach(function(c) {
+        atkMetalLost += (c.metal || 0);
+        atkCrystalLost += (c.crystal || 0);
+    });
 
-    // Defender stats
-    document.getElementById('defenderStats').innerHTML =
-        '<div class="result-stat"><span class="label">Units Lost</span><span class="value loss">' + formatNum(result.defender_losses) + '</span></div>' +
-        '<div class="result-stat"><span class="label">Losses</span><span class="value loss">' + defenderLossPct + '%</span></div>' +
-        '<div class="result-stat"><span class="label">Units Remaining</span><span class="value win">' + formatNum(result.defender_ships_remaining) + '</span></div>';
+    // Build totals HTML
+    var atkTotalsHtml = buildTotalsRow(atkDetail, result.attacker_losses, 'attacker');
+
+    // --- Defender detail ---
+    var defShips = result.defender_ships_detail || {};
+    var defDefenses = result.defender_defenses_detail || {};
+
+    var defShipHtml = buildDetailTable(defShips, SHIP_NAMES, 'defender_ships_detail');
+    var defDefHtml = buildDetailTable(defDefenses, DEFENSE_NAMES, 'defender_defenses_detail');
+
+    // Defender totals
+    var defLosses = result.defender_losses || 0;
+    var defMetalLost = 0, defCrystalLost = 0;
+    var defCosts = result.defender_lost_costs || {};
+    Object.values(defCosts).forEach(function(c) {
+        defMetalLost += (c.metal || 0);
+        defCrystalLost += (c.crystal || 0);
+    });
+
+    // Combine all for loss %
+    var allDefDetail = Object.assign({}, defShips, defDefenses);
+    var defTotalsHtml = buildTotalsRow(allDefDetail, defLosses, 'defender');
+
+    // --- Render ---
+    document.getElementById('attackerDetail').innerHTML = atkHtml;
+    document.getElementById('attackerTotals').innerHTML = atkTotalsHtml;
+
+    var defFullHtml = defShipHtml;
+    if (Object.keys(defDefenses).length > 0) {
+        defFullHtml += '<h5 style="color:#848484;font-size:12px;margin:10px 0 4px;">🛡️ Defenses</h5>' + defDefHtml;
+    }
+    document.getElementById('defenderDetail').innerHTML = defFullHtml;
+    document.getElementById('defenderTotals').innerHTML = defTotalsHtml;
+
+    // --- Cost totals ---
+    var costHtml = '';
+    if (atkMetalLost + atkCrystalLost > 0) {
+        costHtml += '<div class="cost-total"><span class="label">⚔️ Attacker Loss Cost</span> ';
+        costHtml += '<span class="value">🔩 ' + formatNum(atkMetalLost) + '  💎 ' + formatNum(atkCrystalLost) + '</span></div>';
+    }
+    if (defMetalLost + defCrystalLost > 0) {
+        costHtml += '<div class="cost-total"><span class="label">🛡️ Defender Loss Cost</span> ';
+        costHtml += '<span class="value">🔩 ' + formatNum(defMetalLost) + '  💎 ' + formatNum(defCrystalLost) + '</span></div>';
+    }
 
     // Rounds
-    var rounds = result.rounds || '?';
-    document.getElementById('attackerStats').innerHTML +=
-        '<div class="result-stat"><span class="label">Rounds Fought</span><span class="value">' + rounds + '</span></div>';
+    if (result.rounds) {
+        costHtml += '<div class="cost-total"><span class="label">⚡ Rounds Fought</span> <span class="value">' + result.rounds + '</span></div>';
+    }
 
-    // Loot
+    document.getElementById('attackerTotals').innerHTML += costHtml;
+
+    // --- Loot & aftermath ---
     var lootBox = document.getElementById('lootBox');
     var lootHtml = '';
+
+    // Plunder
     if (result.winner === 'attacker' && (result.loot_metal > 0 || result.loot_crystal > 0 || result.loot_deuterium > 0)) {
         lootHtml += '<h4>💰 Resources Plundered</h4>';
         lootHtml += '<div class="result-stat"><span class="label">🔩 Metal</span><span class="value">' + formatNum(result.loot_metal) + '</span></div>';
@@ -432,7 +529,7 @@ function showResults(result, data) {
         lootHtml += '<div class="result-stat"><span class="label">💧 Deuterium</span><span class="value">' + formatNum(result.loot_deuterium) + '</span></div>';
     }
 
-    // Debris field
+    // Debris
     if (result.debris_metal > 0 || result.debris_crystal > 0) {
         lootHtml += '<h4 style="margin-top:12px;">🌀 Debris Field</h4>';
         lootHtml += '<div class="result-stat"><span class="label">🔩 Metal</span><span class="value">' + formatNum(result.debris_metal) + '</span></div>';
@@ -451,6 +548,61 @@ function showResults(result, data) {
 
     // Scroll to results
     resultsDiv.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function buildDetailTable(detail, nameMap, key) {
+    if (!detail || Object.keys(detail).length === 0) {
+        return '<p style="color:#848484;font-size:12px;">No units deployed.</p>';
+    }
+
+    var html = '<table class="detail-table"><thead><tr>';
+    html += '<th>Unit</th>';
+    html += '<th class="num">Initial</th>';
+    html += '<th class="num">Final</th>';
+    html += '</tr></thead><tbody>';
+
+    var shipIds = Object.keys(detail).map(Number).sort(function(a,b) { return a - b; });
+    shipIds.forEach(function(id) {
+        var d = detail[id];
+        var name = nameMap[id] || ('#' + id);
+        var lost = d.initial - d.final;
+
+        html += '<tr>';
+        html += '<td>' + name + '</td>';
+        html += '<td class="num">' + formatNum(d.initial) + '</td>';
+
+        if (d.final === 0) {
+            html += '<td class="num destroyed">0</td>';
+        } else if (d.final >= d.initial) {
+            html += '<td class="num survived">' + formatNum(d.final) + '</td>';
+        } else {
+            html += '<td class="num survived">' + formatNum(d.final) + '</td>';
+        }
+        html += '</tr>';
+    });
+
+    html += '</tbody></table>';
+    return html;
+}
+
+function buildTotalsRow(detail, totalLost, side) {
+    var totalInitial = 0, totalFinal = 0;
+    Object.values(detail).forEach(function(d) {
+        totalInitial += d.initial || 0;
+        totalFinal += d.final || 0;
+    });
+
+    if (totalInitial === 0) return '';
+
+    var lossPct = Math.round(((totalInitial - totalFinal) / totalInitial) * 100);
+    var cls = side === 'attacker' ? 'win' : 'loss';
+
+    return '<div class="result-stat" style="margin-top:8px;font-weight:bold;border-top:1px solid #415680;padding-top:6px;">' +
+        '<span class="label">Units Lost</span>' +
+        '<span class="value ' + cls + '">' + formatNum(totalLost) + ' (' + lossPct + '%)</span></div>' +
+        '<div class="result-stat">' +
+        '<span class="label">Units Remaining</span>' +
+        '<span class="value">' + formatNum(totalFinal) + '</span></div>';
 }
 
 function formatNum(n) {

@@ -168,12 +168,47 @@ class BattleSimulator
         $debris = $report->getDebris();
         $moonProb = $report->getMoonProb();
 
+        // Per-ship-type breakdown: extract initial counts + surviving counts from OPBE report
+        $attackerInitial = $attackerShips;
+        $attackerFinal = $this->extractFleetComposition($report->getAfterBattleAttackers());
+
+        // Defender has both ships and defenses — separate them
+        $defenderFinal_all = $this->extractFleetComposition($report->getAfterBattleDefenders());
+        $defenderShipsFinal = [];
+        $defenderDefensesFinal = [];
+
+        foreach ($defenderFinal_all as $id => $count) {
+            if ($id >= 400) {
+                $defenderDefensesFinal[$id] = $count;
+            } else {
+                $defenderShipsFinal[$id] = $count;
+            }
+        }
+
+        // Build detail arrays with initial → final
+        $attackerDetail = $this->buildDetail($attackerInitial, $attackerFinal);
+        $defenderShipsDetail = $this->buildDetail($defenderShips, $defenderShipsFinal);
+        $defenderDefensesDetail = $this->buildDetail($defenderDefenses, $defenderDefensesFinal);
+
+        // Compute per-type lost units for costs
+        $attackerLostUnitsDetail = $report->getAttackersLostUnits();
+        $defenderLostUnitsDetail = $report->getDefendersLostUnits();
+
+        // Flatten lost units to [shipId => [metal, crystal]]
+        $attackerCostsByType = $this->flattenLostUnits($attackerLostUnitsDetail);
+        $defenderCostsByType = $this->flattenLostUnits($defenderLostUnitsDetail);
+
         return [
             'winner'                    => $winner,
             'attacker_losses'           => $attackerLost,
             'defender_losses'           => $defenderLost,
             'attacker_ships_remaining'  => $attackerRemaining,
             'defender_ships_remaining'  => $defenderRemaining,
+            'attacker_ships_detail'     => $attackerDetail,
+            'defender_ships_detail'     => $defenderShipsDetail,
+            'defender_defenses_detail'  => $defenderDefensesDetail,
+            'attacker_lost_costs'       => $attackerCostsByType,
+            'defender_lost_costs'       => $defenderCostsByType,
             'loot_metal'                => $lootMetal,
             'loot_crystal'              => $lootCrystal,
             'loot_deuterium'            => $lootDeuterium,
@@ -182,6 +217,76 @@ class BattleSimulator
             'moon_chance'               => $moonProb,
             'rounds'                    => $report->getLastRoundNumber(),
         ];
+    }
+
+    /**
+     * Extract ship/defense counts from a PlayerGroup (after battle).
+     *
+     * @return array<int, int>  Unit ID => count
+     */
+    private function extractFleetComposition(\Xgp\App\Libraries\BattleEngine\Models\PlayerGroup $playerGroup): array
+    {
+        $composition = [];
+
+        foreach ($playerGroup->getIterator() as $player) {
+            foreach ($player->getIterator() as $fleet) {
+                foreach ($fleet->getIterator() as $unitId => $unit) {
+                    $count = $unit->getCount();
+                    if ($count > 0) {
+                        $composition[$unitId] = ($composition[$unitId] ?? 0) + $count;
+                    }
+                }
+            }
+        }
+
+        return $composition;
+    }
+
+    /**
+     * Build initial→final detail arrays from initial and final counts.
+     *
+     * @param  array<int, int>  $initial
+     * @param  array<int, int>  $final
+     * @return array<int, array{initial: int, final: int}>
+     */
+    private function buildDetail(array $initial, array $final): array
+    {
+        $detail = [];
+
+        foreach ($initial as $id => $count) {
+            $detail[$id] = [
+                'initial' => $count,
+                'final'   => $final[$id] ?? 0,
+            ];
+        }
+
+        return $detail;
+    }
+
+    /**
+     * Flatten the nested lost-units structure to [unitId => [metal, crystal]].
+     *
+     * @param  array  $lostUnits  From getAttackersLostUnits() / getDefendersLostUnits()
+     * @return array<int, array{metal: int, crystal: int}>
+     */
+    private function flattenLostUnits(array $lostUnits): array
+    {
+        $flat = [];
+
+        foreach ($lostUnits as $player) {
+            foreach ($player as $fleet) {
+                foreach ($fleet as $role => $unitTypes) {
+                    foreach ($unitTypes as $unitId => $costs) {
+                        $flat[$unitId] = [
+                            'metal'   => (int) ($costs[0] ?? 0),
+                            'crystal' => (int) ($costs[1] ?? 0),
+                        ];
+                    }
+                }
+            }
+        }
+
+        return $flat;
     }
 
     /**
