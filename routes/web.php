@@ -25,6 +25,13 @@ Route::prefix('/')->group(function () {
 
 Route::prefix('game/battle-simulator')->group(function () {
     Route::post('/simulate', [BattleSim::class, 'simulate'])->name('battlesimulator.simulate');
+    Route::get('/clear-cache', function () {
+        if (function_exists('opcache_reset')) { opcache_reset(); }
+        if (function_exists('apcu_clear_cache')) { apcu_clear_cache(); }
+        \Illuminate\Support\Facades\Cache::flush();
+        \Illuminate\Support\Facades\Artisan::call('view:clear');
+        return response()->json(['status' => 'ok', 'opcache' => function_exists('opcache_reset')]);
+    })->name('battlesimulator.clear-cache');
 });
 
 Route::prefix('home/ajax')->group(function () {
