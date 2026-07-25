@@ -454,6 +454,14 @@ class FleetsLib
                 . '&#x2716; Recall</a>';
         }
 
+        // Add ACS button for own outbound ATTACK fleets that haven't arrived yet
+        $bloc['fleet_acs'] = '';
+        if ($Owner && $Status === 0 && $fleetRow['fleet_mess'] == 0 && $fleetRow['fleet_mission'] == Missions::ATTACK) {
+            $bloc['fleet_acs'] = '<a href="game.php?page=federationlayer&fleet=' . $fleetRow['fleet_id'] . '" '
+                . 'class="acs_fleet" title="Form ACS Attack">'
+                . '&#9876; ACS</a>';
+        }
+
         return Template::render(
             'overview.fleets',
             $bloc

@@ -174,7 +174,13 @@ class Attack extends Missions
 
             $this->updatePoints($report, $afterBattleAttackers, $afterBattleDefenders);
             $this->updateDebris($fleet_row, $report);
-            $this->updateMoon($fleet_row, $report, $targetUserId);
+
+            try {
+                $this->updateMoon($fleet_row, $report, $targetUserId);
+            } catch (\Exception $e) {
+                \Log::error('updateMoon FAILED: ' . $e->getMessage() . ' at ' . $e->getFile() . ':' . $e->getLine());
+            }
+
             try {
                 $this->createNewReportAndSendIt($fleet_row, $report, $target_planet['planet_name']);
             } catch (\Exception $e) {
@@ -408,7 +414,7 @@ class Attack extends Missions
             ],
         ]);
 
-        if ($moon_exists['planet_id'] != null) {
+        if (!empty($moon_exists['planet_id'])) {
             return;
         }
 

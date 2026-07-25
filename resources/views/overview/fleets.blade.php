@@ -6,8 +6,9 @@
     </th><th role="cell" colspan="2">
         <span class="{{$fleet_status}} {{$fleet_prefix}}{{$fleet_style}}">{!! $fleet_descr !!}</span>
     </th>
-    <th role="cell">
+    <th role="cell" style="white-space:nowrap;">
         {!! $fleet_cancel ?? '' !!}
+        {!! $fleet_acs ?? '' !!}
     </th>
     {!! $fleet_javas !!}
 </tr>
