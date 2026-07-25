@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\View\Components\Game;
 
+use App\Models\Changelog;
 use App\Models\User;
 use App\Services\FormatService;
 use App\Services\SettingsService;
@@ -93,8 +94,15 @@ class Leftmenu extends Component
             ];
         }
 
+        $langCode = $this->settingsService->getString('lang');
+        $latestVersion = Changelog::query()
+            ->join('languages', 'languages.id', '=', 'changelog.changelog_lang_id')
+            ->where('languages.code', $langCode)
+            ->orderByDesc('changelog_date')
+            ->value('changelog_version');
+
         /** @var string $versionFile */
-        $versionFile = config('version.files');
+        $versionFile = $latestVersion ?: config('version.files');
 
         return view(
             'components.game.leftmenu',
