@@ -39,6 +39,7 @@ class Reports extends Model
         'report_content',
         'report_destroyed',
         'report_time',
+        'report_share_token',
     ];
 
     /**

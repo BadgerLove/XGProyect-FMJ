@@ -12,6 +12,7 @@ use App\Http\Controllers\Home\Ajax\MediaController;
 use App\Http\Controllers\Home\LoginController;
 use App\Http\Controllers\Home\RegisterController;
 use App\Http\Controllers\Game\BattleSimulatorController as BattleSim;
+use App\Http\Controllers\Game\CombatreportController;
 use App\Http\Controllers\Home\RulesController;
 use App\Http\Controllers\Home\WelcomeController;
 use Illuminate\Support\Facades\Route;
@@ -22,6 +23,8 @@ Route::prefix('/')->group(function () {
     Route::post('/login', LoginController::class)->name('home.login');
     Route::post('/register', RegisterController::class)->name('home.register');
 });
+
+Route::get('combatreport/shared/{token}', [Game\CombatreportController::class, 'shared'])->name('combatreport.shared');
 
 Route::prefix('game/battle-simulator')->group(function () {
     Route::post('/simulate', [BattleSim::class, 'simulate'])->name('battlesimulator.simulate');
