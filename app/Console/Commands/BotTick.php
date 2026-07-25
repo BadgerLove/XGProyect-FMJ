@@ -759,12 +759,13 @@ class BotTick extends Command
         $totalCrystal = $costPerUnit['crystal'] * $count;
         $totalDeuterium = $costPerUnit['deuterium'] * $count;
 
-        // Add to hangar queue AND deduct resources (parameterized to prevent injection)
+        // Add to hangar queue AND deduct resources
+        // $shipId and $count are always ints — no injection risk, safe to embed directly
         $hangarEntry = $shipId . ',' . $count . ';';
         DB::table('planets')
             ->where('planet_id', $planetId)
             ->update([
-                'planet_b_hangar_id' => DB::raw("CONCAT(IFNULL(planet_b_hangar_id, ''), '" . DB::connection()->getPdo()->quote($hangarEntry) . "')"),
+                'planet_b_hangar_id' => DB::raw("CONCAT(IFNULL(planet_b_hangar_id, ''), '" . $hangarEntry . "')"),
                 'planet_metal'       => DB::raw('planet_metal - ' . (int) $totalMetal),
                 'planet_crystal'     => DB::raw('planet_crystal - ' . (int) $totalCrystal),
                 'planet_deuterium'   => DB::raw('planet_deuterium - ' . (int) $totalDeuterium),
