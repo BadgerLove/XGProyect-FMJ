@@ -121,7 +121,7 @@ class FederationController extends BaseController
             if ($fleet_id) {
                 $own_fleet = $this->_fleets->getOwnValidFleetById($fleet_id);
 
-                $acs = $this->getAcsDataByGroupId($own_fleet->getFleetGroup());
+                $acs = $this->getAcsDataByGroupId((int) $own_fleet->getFleetGroup());
 
                 if ($acs['acs_members'] < 5 &&
                     $member != $this->user['id']) {
@@ -163,7 +163,7 @@ class FederationController extends BaseController
             if ($fleet_id) {
                 $own_fleet = $this->_fleets->getOwnValidFleetById($fleet_id);
 
-                $acs = $this->getAcsDataByGroupId($own_fleet->getFleetGroup());
+                $acs = $this->getAcsDataByGroupId((int) $own_fleet->getFleetGroup());
 
                 if ($acs['acs_members'] >= 1 &&
                     $member != $this->user['id']) {
@@ -229,7 +229,7 @@ class FederationController extends BaseController
             if ($fleet_id) {
                 $own_fleet = $this->_fleets->getOwnValidFleetById($fleet_id);
 
-                $acs = $this->getAcsDataByGroupId($own_fleet->getFleetGroup());
+                $acs = $this->getAcsDataByGroupId((int) $own_fleet->getFleetGroup());
 
                 DB::statement(
                     $this->prepareSql(
@@ -295,7 +295,7 @@ class FederationController extends BaseController
                         return $group_id;
                     });
                 } else {
-                    $group_id = $own_fleet->getFleetGroup();
+                    $group_id = (int) $own_fleet->getFleetGroup();
                 }
 
                 $this->_group = new AcsFleets(
