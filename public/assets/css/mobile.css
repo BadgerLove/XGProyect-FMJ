@@ -1,9 +1,9 @@
-/* ============================================
-   MOBILE RESPONSIVE CSS — FMJ oGame
+﻿/* ============================================
+   MOBILE RESPONSIVE CSS â€” FMJ oGame
    Added 2026-07-17
    
    This file is purely additive. Media queries
-   only activate on screens ≤768px. Desktop is
+   only activate on screens â‰¤768px. Desktop is
    completely unaffected.
    ============================================ */
 
@@ -22,7 +22,7 @@
 }
 
 /* ============================================
-   TABLET AND BELOW (≤768px)
+   TABLET AND BELOW (â‰¤768px)
    ============================================ */
 @media (max-width: 768px) {
 
@@ -296,22 +296,21 @@
 
     /* --- OVERVIEW: Stack vertically --- */
     /* Only match the overview table (has planet image or scope=row) */
-    /* Exclude fleet movement table — it has its own card layout */
     table[width="519"]:has(img[height="200"]),
-    table[width="519"]:has(th[scope="row"]):not(.fleet-movement) {
+    table[width="519"]:has(th[scope="row"]) {
         width: 100% !important;
     }
 
     table[width="519"]:has(img[height="200"]) tr,
-    table[width="519"]:has(th[scope="row"]):not(.fleet-movement) tr {
+    table[width="519"]:has(th[scope="row"]) tr {
         display: flex;
         flex-wrap: wrap;
     }
 
     table[width="519"]:has(img[height="200"]) td.c,
-    table[width="519"]:has(th[scope="row"]):not(.fleet-movement) td.c,
+    table[width="519"]:has(th[scope="row"]) td.c,
     table[width="519"]:has(img[height="200"]) th.c,
-    table[width="519"]:has(th[scope="row"]):not(.fleet-movement) th.c {
+    table[width="519"]:has(th[scope="row"]) th.c {
         flex: 0 0 100%;
         text-align: center;
         font-size: 14px;
@@ -319,7 +318,7 @@
     }
 
     table[width="519"]:has(img[height="200"]) th[scope="row"],
-    table[width="519"]:has(th[scope="row"]):not(.fleet-movement) th[scope="row"] {
+    table[width="519"]:has(th[scope="row"]) th[scope="row"] {
         flex: 0 0 100%;
         background: #2a3a5c;
         font-weight: bold;
@@ -328,7 +327,7 @@
     }
 
     table[width="519"]:has(img[height="200"]) th[role="cell"],
-    table[width="519"]:has(th[scope="row"]):not(.fleet-movement) th[role="cell"] {
+    table[width="519"]:has(th[scope="row"]) th[role="cell"] {
         flex: 1;
         min-width: 80px;
         text-align: center;
@@ -354,9 +353,25 @@
         width: 100%;
     }
 
-    .fleet-movement-scroll table {
-        min-width: 519px;
-        width: 519px;
+    /* Force table to keep its natural width for horizontal scroll */
+    /* Must beat the overview card CSS which sets width:100% on all width=519 tables */
+    .fleet-movement-scroll > table.fleet-movement {
+        min-width: 519px !important;
+        width: 519px !important;
+        display: table !important;
+    }
+
+    /* Undo overview card flex layout on fleet movement rows */
+    .fleet-movement-scroll > table.fleet-movement tr {
+        display: table-row !important;
+        flex-wrap: nowrap !important;
+    }
+
+    .fleet-movement-scroll > table.fleet-movement th,
+    .fleet-movement-scroll > table.fleet-movement td {
+        display: table-cell !important;
+        flex: none !important;
+        min-width: 0 !important;
     }
 
     /* --- COMPLEX TABLES: Horizontal scroll --- */
@@ -490,7 +505,7 @@
     }
 
     /* ============================================
-       TECHNOLOGY TREE — Compact card layout
+       TECHNOLOGY TREE â€” Compact card layout
        Each row: image+name left, requirements right
        ============================================ */
     table[width="569"] {
@@ -571,8 +586,8 @@
     }
 
     /* ============================================
-       RESOURCE SETTINGS — Card layout
-       Each building: card with 2×2 production grid
+       RESOURCE SETTINGS â€” Card layout
+       Each building: card with 2Ã—2 production grid
        .resource-settings class overrides generic
        table[width="569"] tech tree rules
        ============================================ */
@@ -632,7 +647,7 @@
         border-bottom: 1px solid #415680 !important;
     }
 
-    /* Production value cells: 2×2 grid (Metal, Crystal, Deut, Energy) */
+    /* Production value cells: 2Ã—2 grid (Metal, Crystal, Deut, Energy) */
     table.resource-settings > tbody > tr > th[role="cell"]:nth-of-type(-n+4) {
         flex: 1 1 0%;
         min-width: 0;
@@ -644,19 +659,19 @@
         line-height: 1.4;
     }
 
-    /* 2×2 grid: first and third cell get right border */
+    /* 2Ã—2 grid: first and third cell get right border */
     table.resource-settings > tbody > tr:has(select) > th[role="cell"]:nth-of-type(1),
     table.resource-settings > tbody > tr:has(select) > th[role="cell"]:nth-of-type(3) {
         border-right: 1px solid #415680;
     }
 
-    /* First row of 2×2 gets bottom border */
+    /* First row of 2Ã—2 gets bottom border */
     table.resource-settings > tbody > tr:has(select) > th[role="cell"]:nth-of-type(1),
     table.resource-settings > tbody > tr:has(select) > th[role="cell"]:nth-of-type(2) {
         border-bottom: 1px solid #415680;
     }
 
-    /* Production value labels (Metal:, Crystal:, etc) — resource rows only */
+    /* Production value labels (Metal:, Crystal:, etc) â€” resource rows only */
     table.resource-settings > tbody > tr:has(select) > th[role="cell"]::before {
         display: block;
         font-size: 10px;
@@ -732,234 +747,13 @@
     }
 
     /* ============================================
-       FLEET MOVEMENT — Card layout
-       Each fleet flight becomes a readable card
-       ============================================ */
-
-    /* Override scroll wrapper for card mode */
-    .fleet-movement-scroll {
-        overflow: visible !important;
-    }
-
-    /* Table base */
-    table.fleet-movement {
-        width: 100% !important;
-        min-width: 0 !important;
-        display: block !important;
-    }
-
-    table.fleet-movement > tbody {
-        display: block;
-    }
-
-    table.fleet-movement > tbody > tr {
-        display: flex !important;
-        flex-wrap: wrap !important;
-        align-items: stretch !important;
-        border: 1px solid #415680 !important;
-        margin-bottom: 8px !important;
-        background: #1a2a40 !important;
-        border-radius: 6px !important;
-        overflow: hidden !important;
-    }
-
-    /* Header: fleet/expedition count spans full width */
-    table.fleet-movement > tbody > tr:has(td.c) {
-        background: #2a3a5c !important;
-        border: 0 !important;
-        margin-bottom: 12px !important;
-        display: flex !important;
-    }
-
-    table.fleet-movement > tbody > tr > td.c {
-        flex: 0 0 100%;
-        text-align: center;
-        font-weight: bold;
-        font-size: 12px;
-        padding: 8px 10px;
-        background: transparent;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-
-    /* Hide column headers on mobile */
-    table.fleet-movement > tbody > tr:not(:has(th[role="cell"])):not(:has(td.c)) {
-        display: none !important;
-    }
-
-    /* Fleet number: badge top-left */
-    table.fleet-movement > tbody > tr > th:first-child {
-        flex: 0 0 auto;
-        min-width: 28px;
-        display: block !important;
-        background: #344566 !important;
-        font-weight: bold;
-        font-size: 12px;
-        padding: 4px 6px;
-        border: 0 !important;
-        border-right: 1px solid #415680 !important;
-        text-align: center;
-    }
-
-    /* Mission title cell (nth-of-type=2 because 1st th is scope=row fleet#) */
-    table.fleet-movement > tbody > tr > th[role="cell"]:nth-of-type(2) {
-        flex: 1 1 0%;
-        min-width: 0;
-        display: block !important;
-        padding: 6px 8px;
-        border: 0 !important;
-        background: transparent !important;
-        font-size: 12px;
-        font-weight: bold;
-        text-align: left;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-
-    /* Mission type label (Returning / Outbound) */
-    table.fleet-movement > tbody > tr > th[role="cell"]:nth-of-type(2) a:last-child::before {
-        display: block;
-        font-size: 9px;
-        color: #8899aa;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
-
-    /* Fleet amount cell */
-    table.fleet-movement > tbody > tr > th[role="cell"]:nth-of-type(3) {
-        flex: 0 0 auto;
-        display: block !important;
-        padding: 6px 8px;
-        border: 0 !important;
-        background: transparent !important;
-        font-size: 12px;
-        text-align: right;
-        white-space: nowrap;
-    }
-
-    /* Start coords */
-    table.fleet-movement > tbody > tr > th[role="cell"]:nth-of-type(4) {
-        flex: 1 1 0%;
-        min-width: 0;
-        display: block !important;
-        padding: 4px 6px;
-        border: 0 !important;
-        border-bottom: 1px solid #415680 !important;
-        background: transparent !important;
-        font-size: 11px;
-        text-align: center;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    /* Dest coords */
-    table.fleet-movement > tbody > tr > th[role="cell"]:nth-of-type(6) {
-        flex: 1 1 0%;
-        min-width: 0;
-        display: block !important;
-        padding: 4px 6px;
-        border: 0 !important;
-        border-bottom: 1px solid #415680 !important;
-        border-left: 1px solid #415680 !important;
-        background: transparent !important;
-        font-size: 11px;
-        text-align: center;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    /* Start time — "Depart" label */
-    table.fleet-movement > tbody > tr > th[role="cell"]:nth-of-type(5) {
-        flex: 1 1 0%;
-        min-width: 0;
-        display: block !important;
-        padding: 4px 6px;
-        border: 0 !important;
-        background: transparent !important;
-        font-size: 11px;
-        text-align: center;
-        overflow: hidden;
-        white-space: nowrap;
-    }
-
-    table.fleet-movement > tbody > tr > th[role="cell"]:nth-of-type(5)::before {
-        content: "Depart ";
-        font-size: 9px;
-        color: #8899aa;
-        text-transform: uppercase;
-    }
-
-    /* End time — "Arrive" label */
-    table.fleet-movement > tbody > tr > th[role="cell"]:nth-of-type(7) {
-        flex: 1 1 0%;
-        min-width: 0;
-        display: block !important;
-        padding: 4px 6px;
-        border: 0 !important;
-        border-left: 1px solid #415680 !important;
-        background: transparent !important;
-        font-size: 11px;
-        text-align: center;
-        overflow: hidden;
-        white-space: nowrap;
-    }
-
-    table.fleet-movement > tbody > tr > th[role="cell"]:nth-of-type(7)::before {
-        content: "Arrive ";
-        font-size: 9px;
-        color: #8899aa;
-        text-transform: uppercase;
-    }
-
-    /* Arrival time — ETA full width */
-    table.fleet-movement > tbody > tr > th[role="cell"]:nth-of-type(8) {
-        flex: 0 0 100%;
-        display: block !important;
-        padding: 4px 8px;
-        border: 0 !important;
-        border-top: 1px solid #415680 !important;
-        background: transparent !important;
-        text-align: center;
-        font-size: 11px;
-        font-weight: bold;
-    }
-
-    table.fleet-movement > tbody > tr > th[role="cell"]:nth-of-type(8)::before {
-        content: "ETA ";
-        font-weight: normal;
-        color: #8899aa;
-    }
-
-    /* Actions row: full width */
-    table.fleet-movement > tbody > tr > th[role="cell"]:nth-of-type(9) {
-        flex: 0 0 100%;
-        display: block !important;
-        padding: 6px 8px;
-        border: 0 !important;
-        border-top: 1px solid #415680 !important;
-        background: transparent !important;
-        text-align: center;
-    }
-
-    /* Action buttons */
-    table.fleet-movement input[type="submit"],
-    table.fleet-movement input[type="button"] {
-        font-size: 14px !important;
-        padding: 10px 20px !important;
-        min-height: 44px;
-    }
-
-    /* ============================================
-       HOME PAGE — Landing page responsive
+       HOME PAGE â€” Landing page responsive
        ============================================ */
 
     /* ... home page CSS already added above ... */
 
     /* ============================================
-       GALAXY — Navigation touch-friendly
+       GALAXY â€” Navigation touch-friendly
        ============================================ */
     table[width="656px"] form table td {
         padding: 4px 2px !important;
@@ -1151,7 +945,7 @@
     }
 
     /* ============================================
-       FLEET DISPATCH (fleet1) — Ship selection
+       FLEET DISPATCH (fleet1) â€” Ship selection
        OVERRIDES overview card-layout rules that
        match fleet tables via broad :has() selectors
        ============================================ */
@@ -1201,7 +995,7 @@
     }
 
     /* ============================================
-       FLEET STEP 2 — Stack panels vertically
+       FLEET STEP 2 â€” Stack panels vertically
        OVERRIDES overview card-layout rules
        ============================================ */
     form[action="game.php?page=fleet3"] > table[width="519"] {
@@ -1257,7 +1051,7 @@
     }
 
     /* ============================================
-       FLEET STEP 3 — Stack mission + resources
+       FLEET STEP 3 â€” Stack mission + resources
        OVERRIDES overview card-layout rules
        ============================================ */
     form[action="game.php?page=fleet4"] > table[role="presentation"] {
@@ -1314,7 +1108,7 @@
     }
 
     /* ============================================
-       FLEET MOVEMENT — Horizontal scroll
+       FLEET MOVEMENT â€” Horizontal scroll
        Only target tables with many columns (9-col
        movement/fleet tables), not simple layouts
        ============================================ */
@@ -1327,7 +1121,7 @@
 }
 
 /* ============================================
-   PHONE-SPECIFIC (≤480px)
+   PHONE-SPECIFIC (â‰¤480px)
    ============================================ */
 @media (max-width: 480px) {
 
