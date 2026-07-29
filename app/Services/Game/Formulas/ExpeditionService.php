@@ -170,6 +170,31 @@ class ExpeditionService
         ];
     }
 
+    /**
+     * Get the resource find percentage range based on fleet total value.
+     *
+     * Replaced old top-player-capped expedition points (2026-07-23).
+     * Resources now scale with YOUR fleet, not the #1 player's score.
+     *
+     * @return array{int, int} [minPercent, maxPercent]
+     */
+    public function getFleetResourceTier(int $fleetValue): array
+    {
+        if ($fleetValue < 500_000) {
+            return [3, 8];   // Scout: 3-8%
+        }
+
+        if ($fleetValue < 2_000_000) {
+            return [5, 12];  // Raiding: 5-12%
+        }
+
+        if ($fleetValue < 5_000_000) {
+            return [7, 16];  // Armada: 7-16%
+        }
+
+        return [10, 20];     // Massive: 10-20%
+    }
+
     public function getFleetDeplay(): int
     {
         return $this->pickWeighted($this->getFleetDelayWeights(), 2);

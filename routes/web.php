@@ -37,11 +37,18 @@ Route::prefix('game/battle-simulator')->group(function () {
     })->name('battlesimulator.clear-cache');
 });
 
-Route::prefix('home/ajax')->group(function () {
-    Route::get('/home', HomeController::class)->name('ajax.home');
-    Route::get('/info', InfoController::class)->name('ajax.info');
-    Route::get('/media', MediaController::class)->name('ajax.media');
-});
+// Stateless AJAX routes — no sessions needed, prevents CSRF 419 race on first page load
+Route::prefix('home/ajax')
+    ->withoutMiddleware([
+        \Illuminate\Session\Middleware\StartSession::class,
+        \Illuminate\View\Middleware\ShareErrorsFromSession::class,
+        \App\Http\Middleware\VerifyCsrfToken::class,
+    ])
+    ->group(function () {
+        Route::get('/home', HomeController::class)->name('ajax.home');
+        Route::get('/info', InfoController::class)->name('ajax.info');
+        Route::get('/media', MediaController::class)->name('ajax.media');
+    });
 
 Route::prefix('account')->group(function () {
     Route::get('/recover', RecoverController::class)->name('account.recover');

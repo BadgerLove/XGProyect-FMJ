@@ -101,6 +101,30 @@ class BotBrain
     ];
 
     /**
+     * Moon building priority — sequential, no ROI needed.
+     *
+     * Moons can NOT have mines, solar plants, fusion reactors, or storage.
+     * Only these buildings are valid: Lunar Base, Robot Factory, Sensor Phalanx,
+     * Jump Gate, Missile Silo, and (if we add it) Research Lab.
+     *
+     * Priority:
+     *   1. Lunar Base — adds fields (everything else needs fields)
+     *   2. Robot Factory — speeds up all construction
+     *   3. Sensor Phalanx — spy on neighbors in range (STRATEGIC: see fleet movements)
+     *   4. Missile Silo — defense + IPM capability
+     *   5. Jump Gate — instant fleet teleport between moons (endgame, needs 2 moons)
+     *
+     * @var array<int, array{cap: int, min_rf: int}>
+     */
+    public const MOON_BUILDING_PRIORITY = [
+        Buildings::BUILDING_MONDBASIS  => ['cap' => 10, 'min_rf' => 0],  // Lunar Base — 3 fields per level
+        Buildings::BUILDING_ROBOT_FACTORY => ['cap' => 10, 'min_rf' => 0],  // Robot Factory — build speed
+        Buildings::BUILDING_PHALANX    => ['cap' => 5,  'min_rf' => 0],  // Sensor Phalanx — scout neighbors
+        Buildings::BUILDING_MISSILE_SILO => ['cap' => 5,  'min_rf' => 0],  // Missile Silo — defense
+        Buildings::BUILDING_JUMP_GATE  => ['cap' => 1,  'min_rf' => 0],  // Jump Gate — instant travel
+    ];
+
+    /**
      * Research priority for raiders (dead code — see nextResearch() for actual order).
      * @var array<int, int>
      */
@@ -166,6 +190,12 @@ class BotBrain
      */
     public function nextBuilding(array $planet, array $user): ?int
     {
+        // ─── Moon path ─────────────────────────────────────────────
+        // Moons have completely different buildings — route early
+        if ($this->isMoon($planet)) {
+            return $this->nextMoonBuilding($planet, $user);
+        }
+
         $personality = $this->getPersonality($user);
         $weights = self::BUILDING_WEIGHTS[$personality] ?? self::BUILDING_WEIGHTS['raider'];
 
@@ -189,20 +219,159 @@ class BotBrain
         // ─── 3. Facilities (smart gating) ───────────────────────────
         $facility = $this->getNextFacility($planet, $user, $weights);
         if ($facility !== null) {
+            if ($this->shouldDeferToResearch($facility, $planet, $user)) {
+                return null;
+            }
             return $facility;
         }
 
         // ─── 4. Mines (ROI-based, lowest DOIR first) ────────────────
         $mine = $this->getNextMine($planet, $weights);
         if ($mine !== null) {
+            // Research deferral: if research is a better investment, skip building
+            // and save resources. Energy and deposits already handled above.
+            if ($this->shouldDeferToResearch($mine, $planet, $user)) {
+                return null;
+            }
             return $mine;
         }
 
         // ─── 5. Facilities — force pass (any remaining) ─────────────
-        return $this->getNextFacilityForce($planet, $user, $weights);
+        $facility = $this->getNextFacilityForce($planet, $user, $weights);
+        if ($facility !== null && $this->shouldDeferToResearch($facility, $planet, $user)) {
+            return null;
+        }
+        return $facility;
     }
 
     // ─── Building Decision Helpers ──────────────────────────────────
+
+    /**
+     * Check whether building should be deferred in favour of research.
+     *
+     * Compares the next research DOIR against the candidate building DOIR.
+     * If research is a better investment (lower DOIR), the bot skips building
+     * and lets resources accumulate for the research instead.
+     *
+     * This prevents the building system from perpetually spending resources
+     * that should be saved for critical tech like Impulse Drive (gateway to colonies).
+     */
+    private function shouldDeferToResearch(int $buildingId, array $planet, array $user): bool
+    {
+        $researchId = $this->nextResearch($user);
+
+        if ($researchId === null) {
+            return false; // Nothing to research — don't defer
+        }
+
+        // CRITICAL: Only defer if the bot can actually AFFORD the research.
+        // Otherwise we get a deadlock: defer building → save resources →
+        // can't afford research → resources idle → repeat forever.
+        $researchLevel = (int) ($user['research_' . $this->getResearchColumn($researchId)] ?? 0);
+        $researchCost = $this->getResearchCost($researchId, $researchLevel);
+        if ($researchCost === null) {
+            return false;
+        }
+
+        $metal = (float) ($planet['planet_metal'] ?? 0);
+        $crystal = (float) ($planet['planet_crystal'] ?? 0);
+        $deuterium = (float) ($planet['planet_deuterium'] ?? 0);
+
+        $canAffordResearch = $metal >= $researchCost['metal']
+            && $crystal >= $researchCost['crystal']
+            && $deuterium >= $researchCost['deuterium'];
+
+        if (!$canAffordResearch) {
+            return false; // Can't afford research — keep building instead
+        }
+
+        $buildingLevel = $this->getBuildingLevel($buildingId, $planet);
+        $buildingDoir = ROICalculator::calcBuildingDOIR($planet, $buildingId, $buildingLevel);
+        $researchDoir = ROICalculator::calcResearchDOIR($user, $planet, $researchId);
+
+        // Research wins if it has a lower (better) DOIR
+        return $researchDoir < $buildingDoir;
+    }
+
+    // ─── Moon Building Logic ──────────────────────────────────────
+
+    /**
+     * Check if this planet is a moon (planet_type = 3).
+     *
+     * @param  array<string, mixed>  $planet
+     */
+    private function isMoon(array $planet): bool
+    {
+        return ((int) ($planet['planet_type'] ?? 1)) === 3;
+    }
+
+    /**
+     * Decide what to build next on a moon.
+     *
+     * Moons are strategic assets — Sensor Phalanx lets you spy on neighbors'
+     * fleet movements, Jump Gate enables instant fleet deployment. High priority
+     * for dominating a local area.
+     *
+     * Moon buildings are sequential (no ROI calculation needed):
+     *   Lunar Base → Robot Factory → Sensor Phalanx → Missile Silo → Jump Gate
+     *
+     * @param  array<string, mixed>  $planet
+     * @param  array<string, mixed>  $user
+     */
+    private function nextMoonBuilding(array $planet, array $user): ?int
+    {
+        foreach (self::MOON_BUILDING_PRIORITY as $buildingId => $config) {
+            $level = $this->getBuildingLevel($buildingId, $planet);
+            $cap = $config['cap'];
+
+            if ($level >= $cap) {
+                continue;
+            }
+
+            // Check Robot Factory prerequisite for Sensor Phalanx / Jump Gate
+            if ($config['min_rf'] > 0) {
+                $rfLevel = $this->getBuildingLevel(Buildings::BUILDING_ROBOT_FACTORY, $planet);
+                if ($rfLevel < $config['min_rf']) {
+                    continue;
+                }
+            }
+
+            // Prerequisites: Sensor Phalanx needs Lunar Base >= 1, Jump Gate needs Lunar Base >= 1
+            if ($buildingId === Buildings::BUILDING_PHALANX || $buildingId === Buildings::BUILDING_JUMP_GATE) {
+                $lunarBaseLevel = $this->getBuildingLevel(Buildings::BUILDING_MONDBASIS, $planet);
+                if ($lunarBaseLevel < 1) {
+                    continue;
+                }
+            }
+
+            // Missile Silo needs Lunar Base >= 1 too
+            if ($buildingId === Buildings::BUILDING_MISSILE_SILO) {
+                $lunarBaseLevel = $this->getBuildingLevel(Buildings::BUILDING_MONDBASIS, $planet);
+                if ($lunarBaseLevel < 1) {
+                    continue;
+                }
+            }
+
+            // Jump Gate needs Lunar Base >= 1 AND Robot Factory >= 1
+            if ($buildingId === Buildings::BUILDING_JUMP_GATE) {
+                $rfLevel = $this->getBuildingLevel(Buildings::BUILDING_ROBOT_FACTORY, $planet);
+                if ($rfLevel < 1) {
+                    continue;
+                }
+            }
+
+            if ($this->canAfford($buildingId, $level, $planet)) {
+                return $buildingId;
+            }
+
+            // Can't afford this one — still the right priority, just wait for resources
+            // Don't skip to a cheaper building; moons should build in strict order
+            return null;
+        }
+
+        // All moon buildings maxed — nothing to build
+        return null;
+    }
 
     /**
      * Check if planet has negative energy (need more solar/fusion).
@@ -664,7 +833,9 @@ class BotBrain
         }
 
         $bestResearch = null;
+        $bestAffordableResearch = null;
         $bestScore = PHP_FLOAT_MAX;
+        $bestAffordableScore = PHP_FLOAT_MAX;
 
         // All researchable techs
         $researchIds = [
@@ -706,13 +877,33 @@ class BotBrain
             // Calculate DOIR
             $doir = ROICalculator::calcResearchDOIR($user, $planet, $researchId);
 
+            // Track best overall (for reference)
             if ($doir < $bestScore) {
                 $bestScore = $doir;
                 $bestResearch = $researchId;
             }
+
+            // Track best AFFORDABLE — this is what we actually return.
+            // Prevents deadlock: bot defers building for research it can't afford,
+            // resources sit idle, nothing happens for hours.
+            if (!empty($planet) && $doir < $bestAffordableScore) {
+                $cost = $this->getResearchCost($researchId, $currentLevel);
+                if ($cost !== null) {
+                    $metal = (float) ($planet['planet_metal'] ?? 0);
+                    $crystal = (float) ($planet['planet_crystal'] ?? 0);
+                    $deuterium = (float) ($planet['planet_deuterium'] ?? 0);
+
+                    if ($metal >= $cost['metal'] && $crystal >= $cost['crystal'] && $deuterium >= $cost['deuterium']) {
+                        $bestAffordableScore = $doir;
+                        $bestAffordableResearch = $researchId;
+                    }
+                }
+            }
         }
 
-        return $bestResearch;
+        // Return affordable research if available, otherwise null
+        // (null means building system takes over instead of deadlocking)
+        return $bestAffordableResearch;
     }
 
     /**

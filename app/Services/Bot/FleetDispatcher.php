@@ -388,6 +388,110 @@ class FleetDispatcher
     }
 
     /**
+     * Send an expedition fleet to slot 16 (deep space).
+     *
+     * Expedition timing:
+     *   - fleet_start_time = arrival at destination
+     *   - fleet_end_stay   = end of stay (arrival + stay duration)
+     *   - fleet_end_time   = arrival back home (stay end + return flight)
+     *   - fleet_mess       = 0 (outbound)
+     *
+     * @param  array<string, mixed>  $botPlanet
+     * @param  array<string, mixed>  $botUser
+     * @param  int  $targetSystem  System to send expedition to
+     * @param  int  $targetGalaxy  Galaxy (usually same as bot's)
+     * @param  array<int, int>  $ships  Ship ID => count
+     * @param  int  $stayDuration  How long to stay at slot 16 (seconds)
+     *
+     * @return int|null Fleet ID if dispatched, null on failure
+     */
+    public function sendExpedition(
+        array $botPlanet,
+        array $botUser,
+        int $targetGalaxy,
+        int $targetSystem,
+        array $ships,
+        int $stayDuration
+    ): ?int {
+        // Verify bot has enough ships
+        foreach ($ships as $shipId => $count) {
+            $column = $this->getShipColumn($shipId);
+            $available = (int) ($botPlanet[$column] ?? 0);
+
+            if ($available < $count) {
+                return null;
+            }
+        }
+
+        // Slot 16 is always planet 16
+        $target = ['galaxy' => $targetGalaxy, 'system' => $targetSystem, 'planet' => 16];
+        $fuel = $this->calculateFuel($ships, $botPlanet, $botUser, $target);
+
+        if ($fuel === null) {
+            return null;
+        }
+
+        $deuterium = (float) ($botPlanet['planet_deuterium'] ?? 0);
+
+        // Need extra deuterium for the return trip (approximate: fuel * 1.5)
+        if ($deuterium < $fuel * 1.5) {
+            return null;
+        }
+
+        // Deduct fuel and ships
+        $this->deductFuel($botPlanet['planet_id'], $fuel);
+        $this->deductShips($botPlanet['planet_id'], $ships);
+
+        // Calculate flight times
+        $flightDuration = $this->calculateFlightDuration($ships, $botPlanet, $botUser, $target);
+        $now = time();
+        $arrivalTime = $now + $flightDuration;
+        $stayEndTime = $arrivalTime + $stayDuration;
+        // Return flight takes same duration as outbound
+        $returnArrival = $stayEndTime + $flightDuration;
+        $totalShips = array_sum($ships);
+
+        return $this->insertFleet([
+            'fleet_owner'           => $botPlanet['planet_user_id'],
+            'fleet_mission'         => Missions::EXPEDITION,
+            'fleet_amount'          => $totalShips,
+            'fleet_array'           => serialize($ships),
+            'fleet_start_time'      => $arrivalTime,
+            'fleet_start_galaxy'    => $botPlanet['planet_galaxy'],
+            'fleet_start_system'    => $botPlanet['planet_system'],
+            'fleet_start_planet'    => $botPlanet['planet_planet'],
+            'fleet_start_type'      => 1,
+            'fleet_end_time'        => $returnArrival,
+            'fleet_end_stay'        => $stayEndTime,
+            'fleet_end_galaxy'      => $targetGalaxy,
+            'fleet_end_system'      => $targetSystem,
+            'fleet_end_planet'      => 16,
+            'fleet_end_type'        => 1,
+            'fleet_target_obj'      => 0,
+            'fleet_resource_metal'  => 0,
+            'fleet_resource_crystal' => 0,
+            'fleet_resource_deuterium' => 0,
+            'fleet_fuel'            => $fuel,
+            'fleet_target_owner'    => 0,
+            'fleet_group'           => '0',
+            'fleet_mess'            => 0,
+            'fleet_creation'        => $now,
+        ]);
+    }
+
+    /**
+     * Count how many active expeditions a user has flying.
+     */
+    public function countActiveExpeditions(int $userId): int
+    {
+        return (int) DB::table('fleets')
+            ->where('fleet_owner', $userId)
+            ->where('fleet_mission', Missions::EXPEDITION)
+            ->where('fleet_mess', 0)
+            ->count();
+    }
+
+    /**
      * Send a transport mission (resource sharing between bots).
      *
      * @param  array<string, mixed>  $botPlanet

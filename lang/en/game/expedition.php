@@ -50,9 +50,12 @@ return [
     'exp_delay_4' => 'For unknown reasons the expeditions jump went totally wrong. It nearly landed in the heart of a sun. Fortunately it landed in a known system, but the jump back is going to take longer than thought.', // ok
     'exp_delay_5' => 'The solar wind of a red giant ruined the expeditions jump and it will take quite some time to calculate the return jump. There was nothing besides the emptiness of space between the stars in that sector. The fleet will return later than expected.', // ok
 
-    // advancement
-    'exp_faster_1' => 'Your expeditions doesn\'t report any anomalies in the explored sector. But the fleet ran into somo solar wind while returning. This resulted in the return trip being expedited. Your expedition returns home a bit earlier.', // ok
-    'exp_faster_2' => 'An unexpected back coupling in the energy spools of the engines hastened the expeditions return, it returns home earlier than expected. First reports tell they do not have anything thrilling to account for.', // ok
+    // early return
+    'exp_early_1' => 'Your expedition doesn\'t report any anomalies in the explored sector. But the fleet ran into some solar wind while returning. This resulted in the return trip being expedited. Your expedition returns home a bit earlier.', // ok
+    'exp_early_2' => 'An unexpected back coupling in the energy spools of the engines hastened the expedition\'s return, it returns home earlier than expected. First reports tell they do not have anything thrilling to account for.', // ok
+    'exp_early_3' => 'The fleet\'s navigational AI found a shortcut through an uncharted gravitational corridor. The expedition returns ahead of schedule, though empty-handed.', // ok
+    'exp_early_4' => 'A favourable ion stream boosted the fleet\'s engines on the return leg. The expedition arrives home earlier than planned with no significant findings.', // ok
+    'exp_early_5' => 'The expedition crew managed to recalibrate the warp drive mid-flight, shaving hours off the return trip. Unfortunately there was nothing remarkable to report from deep space.', // ok
 
     // found object
     'exp_found_object_1' => 'A fleeing fleet left an item behind, in order to distract us in aid of their escape.<br><br>%s has been added to the inventory.', // ok

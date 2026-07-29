@@ -51,9 +51,12 @@ return [
     'exp_delay_4' => '',
     'exp_delay_5' => '',
 
-    // advancement
-    'exp_faster_1' => '',
-    'exp_faster_2' => '',
+    // early return
+    'exp_early_1' => '',
+    'exp_early_2' => '',
+    'exp_early_3' => '',
+    'exp_early_4' => '',
+    'exp_early_5' => '',
 
     // found object
     'exp_found_object_1' => '',
