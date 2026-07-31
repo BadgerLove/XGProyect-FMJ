@@ -200,10 +200,23 @@ class BotBrain
         $weights = self::BUILDING_WEIGHTS[$personality] ?? self::BUILDING_WEIGHTS['raider'];
 
         // ─── 1. Energy Source ───────────────────────────────────────
+        // Energy is NEVER deferred to research — it's a prerequisite for everything.
+        // Negative energy throttles mine production, starving the bot of resources.
         if ($this->isEnergyNegative($planet)) {
+            // Try Solar Plant first
             $solarLevel = (int) ($planet['building_solar_plant'] ?? 0);
             if ($solarLevel < 30 && $this->canAfford(Buildings::BUILDING_SOLAR_PLANT, $solarLevel, $planet)) {
                 return Buildings::BUILDING_SOLAR_PLANT;
+            }
+
+            // Solar too expensive — try Fusion Reactor (cheaper, more energy, costs deut)
+            // Fusion requires Energy Tech 3 (standard OGame prerequisite)
+            $energyTech = (int) ($user['research_energy_technology'] ?? 0);
+            if ($energyTech >= 3) {
+                $fusionLevel = (int) ($planet['building_fusion_reactor'] ?? 0);
+                if ($fusionLevel < 30 && $this->canAfford(Buildings::BUILDING_FUSION_REACTOR, $fusionLevel, $planet)) {
+                    return Buildings::BUILDING_FUSION_REACTOR;
+                }
             }
         }
 
@@ -217,11 +230,10 @@ class BotBrain
         }
 
         // ─── 3. Facilities (smart gating) ───────────────────────────
+        // Facilities are infrastructure — they unlock ships, research, construction speed.
+        // Never deferred to research; the smart gate already ensures they're cost-effective.
         $facility = $this->getNextFacility($planet, $user, $weights);
         if ($facility !== null) {
-            if ($this->shouldDeferToResearch($facility, $planet, $user)) {
-                return null;
-            }
             return $facility;
         }
 
@@ -237,11 +249,8 @@ class BotBrain
         }
 
         // ─── 5. Facilities — force pass (any remaining) ─────────────
-        $facility = $this->getNextFacilityForce($planet, $user, $weights);
-        if ($facility !== null && $this->shouldDeferToResearch($facility, $planet, $user)) {
-            return null;
-        }
-        return $facility;
+        // Never deferred — these are prerequisites the bot needs.
+        return $this->getNextFacilityForce($planet, $user, $weights);
     }
 
     // ─── Building Decision Helpers ──────────────────────────────────

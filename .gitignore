@@ -32,6 +32,11 @@ config/xgp-db-config.php
 .php-cs-fixer.cache
 config/installed.php
 
+# Backup files (prevent accidental commits)
+*.bak
+*.bak-*
+*.backup
+
 # Debug & test scripts
 check_*.php
 debug_*.php

@@ -78,7 +78,7 @@ class PlanetlayerController extends BaseController
         $newName = filter_input(INPUT_POST, 'planetName');
         $newName = strip_tags(trim($newName));
 
-        if (preg_match("/[^A-z0-9_\- ]/", $newName) == 1) {
+        if ($newName === null || $newName === '') {
             Functions::popupMessage(__('game/planetlayer.rename_error'), 'game.php?page=planetlayer', 3);
         }
 
