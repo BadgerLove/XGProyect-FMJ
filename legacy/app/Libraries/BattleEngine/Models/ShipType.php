@@ -497,6 +497,11 @@ class ShipType extends Type
         return $this->currentShield / $this->getCount() < 0.01;
     }
 
+    public function getRepairProb()
+    {
+        return SHIP_REPAIR_PROB;
+    }
+
     public function cloneMe(): ShipType
     {
         $class = get_class($this);
