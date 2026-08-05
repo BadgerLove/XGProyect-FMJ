@@ -224,6 +224,15 @@ class GalaxyController extends BaseController
         $parse['current_planet'] = $this->planet['planet_planet'];
         $parse['coords'] = $this->formatService->prettyCoords((int)$this->_galaxy, (int)$this->_system, (int) $planet);
         $parse['planet_type'] = $this->planet['planet_type'];
+        $parse['defense_rocket_launcher'] = __('game/defenses.defense_rocket_launcher');
+        $parse['defense_light_laser'] = __('game/defenses.defense_light_laser');
+        $parse['defense_heavy_laser'] = __('game/defenses.defense_heavy_laser');
+        $parse['defense_gauss_cannon'] = __('game/defenses.defense_gauss_cannon');
+        $parse['defense_ion_cannon'] = __('game/defenses.defense_ion_cannon');
+        $parse['defense_plasma_turret'] = __('game/defenses.defense_plasma_turret');
+        $parse['defense_small_shield_dome'] = __('game/defenses.defense_small_shield_dome');
+        $parse['defense_large_shield_dome'] = __('game/defenses.defense_large_shield_dome');
+
         $parse['mip'] = ($mode == 2) ? Template::render(
             'galaxy/galaxy_missile_selector',
             $parse
@@ -358,13 +367,13 @@ class GalaxyController extends BaseController
                 }
                 break;
             case 2:
-                $galaxy = intval($_GET['galaxy']);
-                $system = intval($_GET['system']);
-                $planet = intval($_GET['planet']);
+                $galaxy = intval($_GET['galaxy'] ?? 0);
+                $system = intval($_GET['system'] ?? 0);
+                $planet = intval($_GET['planet'] ?? 0);
                 break;
             case 3:
-                $galaxy = intval($_GET['galaxy']);
-                $system = intval($_GET['system']);
+                $galaxy = intval($_GET['galaxy'] ?? 0);
+                $system = intval($_GET['system'] ?? 0);
                 break;
             default:
                 $galaxy = 1;
@@ -386,9 +395,9 @@ class GalaxyController extends BaseController
      */
     private function sendMissiles()
     {
-        $galaxy = intval($_GET['galaxy']);
-        $system = intval($_GET['system']);
-        $planet = intval($_GET['planet']);
+        $galaxy = intval($_GET['galaxy'] ?? 0);
+        $system = intval($_GET['system'] ?? 0);
+        $planet = intval($_GET['planet'] ?? 0);
         $missiles_amount = ($_POST['SendMI'] < 0) ? 0 : intval($_POST['SendMI']);
         $target = $_POST['Target'];
 

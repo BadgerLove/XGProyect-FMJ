@@ -522,7 +522,7 @@ class Expedition extends Missions
 
         $this->updateFleetEndTime(
             (int) $fleet['fleet_id'],
-            ($fleet['fleet_end_time'] + ($returnTime * $fleetDelayMultiplier))
+            (int) ($fleet['fleet_end_time'] + ($returnTime * $fleetDelayMultiplier))
         );
 
         $this->expeditionMessage(
@@ -548,7 +548,7 @@ class Expedition extends Missions
 
         $this->updateFleetEndTime(
             (int) $fleet['fleet_id'],
-            ($fleet['fleet_end_time'] - ($returnTime / 2))
+            (int) ($fleet['fleet_end_time'] - ($returnTime / 2))
         );
 
         $this->expeditionMessage(

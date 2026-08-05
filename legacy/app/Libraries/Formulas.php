@@ -165,7 +165,7 @@ abstract class Formulas
     {
         $prob = (100 - sqrt($planetDiameter)) * sqrt($deathStars);
 
-        return ($prob > 100) ? 100 : round($prob);
+        return ($prob > 100) ? 100 : (int) round($prob);
     }
 
     /**
@@ -203,7 +203,7 @@ abstract class Formulas
      */
     public static function getTearDownBaseCost(int $price, float $factor, int $level): int
     {
-        return floor(self::getDevelopmentCost($price, $factor, ($level - 2)));
+        return (int) floor(self::getDevelopmentCost($price, $factor, ($level - 2)));
     }
 
     /**
@@ -211,7 +211,7 @@ abstract class Formulas
      */
     public static function getTearDownCost(int $price, float $factor, int $level, int $ion_technology_level): int
     {
-        return max(floor(self::getTearDownBaseCost($price, $factor, $level) * (1 - self::getIonTechnologyBonus($ion_technology_level))), 0);
+        return (int) max(floor(self::getTearDownBaseCost($price, $factor, $level) * (1 - self::getIonTechnologyBonus($ion_technology_level))), 0);
     }
 
     /**

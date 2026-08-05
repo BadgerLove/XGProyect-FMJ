@@ -44,10 +44,10 @@ abstract class GeometricDistribution
      */
     public static function getProbabilityFromMean($m)
     {
-        if ($m <= 1) {
+        if ($m <= 0) {
             return 1;
         }
-        return 1 / $m;
+        return 1 / ($m + 1);
     }
 
     /**

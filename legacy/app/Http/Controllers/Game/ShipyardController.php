@@ -471,7 +471,7 @@ class ShipyardController extends BaseController
         }
 
         if ($itemId == Defenses::defense_interplanetary_missile) {
-            $amount = floor($max_amount / 2);
+            $amount = (int) floor($max_amount / 2);
         }
 
         if ($amount_requested > $amount) {

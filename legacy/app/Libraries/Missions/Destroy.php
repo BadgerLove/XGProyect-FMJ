@@ -253,6 +253,7 @@ class Destroy extends Missions
      */
     private function getShipType($id, $count)
     {
+        $count = (int) $count;
         $rf = isset($this->combat_caps[$id]['sd']) ? $this->combat_caps[$id]['sd'] : 0;
         $shield = $this->combat_caps[$id]['shield'];
         $cost = [$this->pricelist[$id]['metal'], $this->pricelist[$id]['crystal']];
@@ -611,22 +612,27 @@ class Destroy extends Missions
                     ];
 
                     if ($playerGroupAfterBattle->battleResult == BATTLE_WIN) {
-                        $corrispectiveMetal = $target_planet['planet_metal'] * $fleetCapacity / $capacity;
-                        $corrispectiveCrystal = $target_planet['planet_crystal'] * $fleetCapacity / $capacity;
-                        $corrispectiveDeuterium = $target_planet['planet_deuterium'] * $fleetCapacity / $capacity;
+                        if ($capacity > 0) {
+                            $corrispectiveMetal = $target_planet['planet_metal'] * $fleetCapacity / $capacity;
+                            $corrispectiveCrystal = $target_planet['planet_crystal'] * $fleetCapacity / $capacity;
+                            $corrispectiveDeuterium = $target_planet['planet_deuterium'] * $fleetCapacity / $capacity;
 
-                        $fleetSteal = $this->plunder(
-                            $fleetCapacity,
-                            $corrispectiveMetal,
-                            $corrispectiveCrystal,
-                            $corrispectiveDeuterium
-                        );
+                            $fleetSteal = $this->plunder(
+                                $fleetCapacity,
+                                $corrispectiveMetal,
+                                $corrispectiveCrystal,
+                                $corrispectiveDeuterium
+                            );
 
-                        $this->updateMoon($target_planet, $fleetArray[Ships::ship_deathstar]);
+                            $steal['metal'] += $fleetSteal['metal'];
+                            $steal['crystal'] += $fleetSteal['crystal'];
+                            $steal['deuterium'] += $fleetSteal['deuterium'];
+                        }
 
-                        $steal['metal'] += $fleetSteal['metal'];
-                        $steal['crystal'] += $fleetSteal['crystal'];
-                        $steal['deuterium'] += $fleetSteal['deuterium'];
+                        $deathstarCount = $fleetArray[Ships::ship_deathstar] ?? 0;
+                        if ($deathstarCount > 0) {
+                            $this->updateMoon($target_planet, $deathstarCount);
+                        }
                     }
 
                     if ($this->_destruction['destroyed'] == 'ds') {

@@ -14,6 +14,7 @@ return [
         7 => 'Colonize',
         8 => 'Recycle',
         9 => 'Destroy',
+        10 => 'Missile',
         15 => 'Expedition',
     ],
 

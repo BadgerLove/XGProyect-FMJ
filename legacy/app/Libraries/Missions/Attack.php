@@ -81,7 +81,7 @@ class Attack extends Missions
 
             // If we have a ACS attack
             if ($fleet_row['fleet_group'] != 0) {
-                $fleets = $this->getAllAcsFleetsByGroupId($fleet_row['fleet_group']);
+                $fleets = $this->getAllAcsFleetsByGroupId((int) $fleet_row['fleet_group']);
                 $attackers = $this->getPlayerGroupFromQuery($fleets);
             } else {
                 $attackers = $this->getPlayerGroup($fleet_row);
