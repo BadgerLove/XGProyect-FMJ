@@ -6,6 +6,7 @@ namespace Xgp\App\Libraries\Missions;
 
 use App\Services\FormatService;
 use Xgp\App\Core\Objects;
+use Xgp\App\Libraries\FleetsLib;
 use Xgp\App\Libraries\Functions;
 
 class Missile extends Missions
@@ -24,6 +25,31 @@ class Missile extends Missions
      */
     public function missileMission($fleet_row)
     {
+        // Handle returning missile fleet (cancelled)
+        if ($fleet_row['fleet_mess'] != 0 && $fleet_row['fleet_end_time'] <= time()) {
+            $message = sprintf(
+                __('game/missions.mi_fleet_back_without_resources'),
+                $fleet_row['planet_end_name'],
+                FleetsLib::targetLink($fleet_row, ''),
+                $fleet_row['planet_start_name'],
+                FleetsLib::startLink($fleet_row, '')
+            );
+
+            Functions::sendMessage(
+                $fleet_row['fleet_owner'],
+                0,
+                $fleet_row['fleet_end_time'],
+                1,
+                __('game/missions.mi_fleet_command'),
+                __('game/missions.mi_fleet_back_title'),
+                $message
+            );
+
+            parent::restoreFleet($fleet_row);
+            parent::removeFleet($fleet_row['fleet_id']);
+            return;
+        }
+
         // do mission
         if (parent::canStartMission($fleet_row)) {
             $attacker_data = $this->getMissileAttackerDataByCoords([
