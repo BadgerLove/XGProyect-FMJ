@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Xgp\App\Libraries\Missions;
 
 use App\Services\FormatService;
+use Illuminate\Support\Facades\DB;
 use Xgp\App\Core\Objects;
 use Xgp\App\Libraries\FleetsLib;
 use Xgp\App\Libraries\Functions;
@@ -45,7 +46,28 @@ class Missile extends Missions
                 $message
             );
 
-            parent::restoreFleet($fleet_row);
+            // Restore missiles to defenses table (not ships)
+            $missiles = FleetsLib::getFleetShipsArray($fleet_row['fleet_array']);
+            $set_parts = [];
+            foreach ($missiles as $id => $amount) {
+                $col = $this->resource[$id];
+                $set_parts[] = "`{$col}` = `{$col}` + '" . (int) $amount . "'";
+            }
+            if (!empty($set_parts)) {
+                $coords = $fleet_row;
+                DB::statement(
+                    $this->prepareSql(
+                        'UPDATE ' . DEFENSES . ' AS d
+                        INNER JOIN ' . PLANETS . " AS p ON p.`planet_id` = d.`defense_planet_id`
+                        SET " . implode(', ', $set_parts) . "
+                        WHERE p.`planet_galaxy` = '" . $coords['fleet_start_galaxy'] . "'
+                            AND p.`planet_system` = '" . $coords['fleet_start_system'] . "'
+                            AND p.`planet_planet` = '" . $coords['fleet_start_planet'] . "'
+                            AND p.`planet_type` = '" . $coords['fleet_start_type'] . "'"
+                    )
+                );
+            }
+
             parent::removeFleet($fleet_row['fleet_id']);
             return;
         }
