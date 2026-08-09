@@ -227,7 +227,7 @@ class Fleet1Controller extends BaseController
             return null;
         }
 
-        return '<input name="ship' . $ship_id . '" size="10" value="0" onfocus="this.select();" onblur="if(this.value == \'\') this.value=\'0\';"/>';
+        return '<input name="ship' . $ship_id . '" size="10" value="0" onfocus="javascript:if(this.value == \'0\') this.value=\'\';" onblur="javascript:if(this.value == \'\') this.value=\'0\';"/>';
     }
 
     /**
