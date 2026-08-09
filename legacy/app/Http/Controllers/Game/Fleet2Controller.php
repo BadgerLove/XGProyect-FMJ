@@ -132,7 +132,7 @@ class Fleet2Controller extends BaseController
                     $ship_id = array_search($ship_name, $objects);
 
                     if (!isset($selected_fleet['ship' . $ship_id]) or
-                        $selected_fleet['ship' . $ship_id] == 0) {
+                        intval($selected_fleet['ship' . $ship_id]) <= 0) {
                         continue;
                     }
 
