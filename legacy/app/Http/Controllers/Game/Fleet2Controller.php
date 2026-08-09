@@ -313,11 +313,7 @@ class Fleet2Controller extends BaseController
             fn ($row) => (array) $row,
             DB::select(
                 $this->prepareSql(
-                    'SELECT acs.*
-                    FROM `' . ACS_MEMBERS . '` am
-                    INNER JOIN `' . ACS . '` acs ON acs.`acs_id` = am.`acs_group_id`
-                    INNER JOIN `' . FLEETS . "` f ON f.`fleet_group` = acs.`acs_id`
-                    WHERE am.`acs_user_id` = '" . $userId . "';"
+                    'SELECT acs.* FROM `' . ACS_MEMBERS . '` am INNER JOIN `' . ACS . '` acs ON acs.`acs_id` = am.`acs_group_id` WHERE am.`acs_user_id` = \'' . $userId . "';"
                 )
             )
         );

@@ -123,8 +123,7 @@ class FederationController extends BaseController
 
                 $acs = $this->getAcsDataByGroupId((int) $own_fleet->getFleetGroup());
 
-                if ($acs['acs_members'] < 5 &&
-                    $member != $this->user['id']) {
+                if ($acs['acs_members'] < 5) {
                     DB::statement(
                         $this->prepareSql(
                             'INSERT INTO `' . ACS_MEMBERS . "` SET

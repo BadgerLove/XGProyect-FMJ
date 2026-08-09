@@ -338,13 +338,13 @@ class Spy extends Missions
             $fleet['fleet_start_time'],
             0,
             __('game/spy.spy_activity_from'),
-            StringsHelper::parseReplacements(
+            '<span style="color:#FF8F00;font-weight:bold;">' . StringsHelper::parseReplacements(
                 __('game/spy.spy_activity_title'),
                 [
                     $target['planet_name'],
                     $this->formatService->prettyCoords((int) $target['planet_galaxy'], (int) $target['planet_system'], (int) $target['planet_planet']),
                 ]
-            ),
+            ) . '</span>',
             StringsHelper::parseReplacements(
                 __('game/spy.spy_activity_enemy_seen'),
                 [

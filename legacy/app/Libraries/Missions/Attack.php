@@ -6,6 +6,7 @@ namespace Xgp\App\Libraries\Missions;
 
 use App\Services\FormatService;
 use App\Services\Game\Formulas\FleetsService;
+use Illuminate\Support\Facades\DB;
 use Xgp\App\Libraries\BattleEngine\Core\Battle;
 use Xgp\App\Libraries\BattleEngine\Core\BattleReport;
 use Xgp\App\Libraries\BattleEngine\Models\Defense;
@@ -64,8 +65,20 @@ class Attack extends Missions
             LangManager::getInstance()->setImplementation(new AttackLang($this->resource));
 
             if ($fleet_row['fleet_group'] > 0) {
-                $this->deleteAcsFleetById($fleet_row['fleet_group']);
-                $this->updateAcsFleetStatusByGroupId($fleet_row['fleet_group']);
+                // Only the ACS leader (owner) can trigger the battle
+                $acsOwnerRow = DB::selectOne(
+                    'SELECT `acs_owner` FROM `' . str_replace('{xgp_prefix}', DB::getTablePrefix(), ACS) . '` WHERE `acs_id` = ?',
+                    [(int) $fleet_row['fleet_group']]
+                );
+                $isLeader = $acsOwnerRow !== null && (int) $acsOwnerRow->acs_owner === (int) $fleet_row['fleet_owner'];
+
+                if ($isLeader) {
+                    $this->deleteAcsFleetById($fleet_row['fleet_group']);
+                    $this->updateAcsFleetStatusByGroupId($fleet_row['fleet_group']);
+                } else {
+                    // Not the leader — hold position and wait for leader to arrive
+                    return;
+                }
             } else {
                 parent::returnFleet($fleet_row['fleet_id']);
             }
