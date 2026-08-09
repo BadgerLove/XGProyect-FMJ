@@ -479,26 +479,71 @@
     }
 
     /* --- SPY / ESPIONAGE REPORTS --- */
-    /* Wrap spy report tables in scroll container */
+    /* CSS Grid on rows: consistent 2-per-line columns, perfectly aligned */
     table[width="440"] {
         width: 100% !important;
-        min-width: 360px;
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
-        display: block;
+        min-width: 0 !important;
+        overflow: visible !important;
+        display: block !important;
     }
 
-    table[width="440"] td {
-        padding: 6px 8px;
-        font-size: 13px;
+    /* Header row: flex full-width */
+    table[width="440"] tr:has(td.c) {
+        display: flex;
     }
 
     table[width="440"] td.c {
+        display: block;
+        flex: 1;
+        text-align: center;
+        font-weight: bold;
+        padding: 8px 10px;
         font-size: 14px;
-        padding: 10px;
+        background: #2a3a5c;
+        border-radius: 4px 4px 0 0;
+        border: 0;
     }
 
-    /* Attack link in spy report */
+    /* Data rows: 4-column grid (label value label value) */
+    /* Labels 3fr, values 2fr = 30% / 20% split per pair */
+    table[width="440"] tr:not(:has(td.c)) {
+        display: grid;
+        grid-template-columns: 3fr 2fr 3fr 2fr;
+        gap: 0 6px;
+        padding: 2px 0;
+        border-bottom: 1px solid #2a3a5c;
+    }
+
+    /* Hide spacer cells (column 3 in original 5-col layout) */
+    table[width="440"] td:nth-child(3):not(.c) {
+        display: none;
+    }
+
+    /* Label cells */
+    table[width="440"] td:not(.c):nth-child(1),
+    table[width="440"] td:not(.c):nth-child(4) {
+        display: block;
+        width: auto !important;
+        padding: 5px 4px;
+        font-size: 12px;
+        text-align: left;
+        border: 0;
+        white-space: normal;
+        word-break: break-word;
+    }
+
+    /* Value cells: right-aligned numbers */
+    table[width="440"] td:not(.c):nth-child(2),
+    table[width="440"] td:not(.c):nth-child(5) {
+        display: block;
+        width: auto !important;
+        padding: 5px 4px;
+        font-size: 12px;
+        text-align: right;
+        border: 0;
+    }
+
+    /* Attack / Simulate links: touch-friendly */
     table[width="440"] a {
         padding: 8px 16px;
         display: inline-block;

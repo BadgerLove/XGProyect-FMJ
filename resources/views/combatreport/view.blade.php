@@ -12,7 +12,7 @@
     </div>
 @else
     <div style="background:#1a1a2e; border:1px solid #333; border-radius:4px; padding:6px 12px; margin-bottom:10px; text-align:center;">
-        <a href="?report={{ request()->query('report') }}&share=1" style="color:#4e73df;">&#128279; Share this battle report</a>
+        <a href="?page=combatreport&report={{ request()->query('report') }}&share=1" style="color:#4e73df;">&#128279; Share this battle report</a>
     </div>
 @endif
 {!! $report !!}

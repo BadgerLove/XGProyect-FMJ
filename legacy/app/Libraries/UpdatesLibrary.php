@@ -915,6 +915,14 @@ class UpdatesLibrary
                     $current_planet['planet_b_hangar_id'] .= $Element . ',' . $Count . ';';
                 }
             }
+
+            // If the queue became empty after processing (all items completed),
+            // reset the hangar timer. Previously, the timer would keep its
+            // residual value, creating "ghost timers" — active timers with
+            // empty queues that persisted across ticks.
+            if ($current_planet['planet_b_hangar_id'] === '') {
+                $current_planet['planet_b_hangar'] = 0;
+            }
         } else {
             $Builded = [];
             $current_planet['planet_b_hangar'] = 0;

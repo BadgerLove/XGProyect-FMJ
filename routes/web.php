@@ -24,7 +24,7 @@ Route::prefix('/')->group(function () {
     Route::post('/register', RegisterController::class)->name('home.register');
 });
 
-Route::get('combatreport/shared/{token}', [Game\CombatreportController::class, 'shared'])->name('combatreport.shared');
+Route::get('combatreport/shared/{token}', [CombatreportController::class, 'shared'])->name('combatreport.shared');
 
 Route::prefix('game/battle-simulator')->group(function () {
     Route::post('/simulate', [BattleSim::class, 'simulate'])->name('battlesimulator.simulate');

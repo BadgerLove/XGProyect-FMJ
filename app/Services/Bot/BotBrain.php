@@ -384,12 +384,27 @@ class BotBrain
 
     /**
      * Check if planet has negative energy (need more solar/fusion).
+     *
+     * planet_energy_used in the DB stores NET energy (production minus consumption).
+     * Negative value means consumption exceeds production — energy deficit.
+     * Also handles the case where used is stored as raw consumption (positive, > max).
      */
-    private function isEnergyNegative(array $planet): bool
+    public function isEnergyNegative(array $planet): bool
     {
         $energyMax = (int) ($planet['planet_energy_max'] ?? 0);
         $energyUsed = (int) ($planet['planet_energy_used'] ?? 0);
-        return $energyMax > 0 && ($energyMax + $energyUsed) < 0;
+
+        if ($energyMax <= 0) {
+            return false; // No production at all — can't be negative
+        }
+
+        // DB stores net energy: negative = deficit, so used < 0 means negative
+        if ($energyUsed < 0) {
+            return true;
+        }
+
+        // Legacy: if used is stored as raw consumption (positive), compare directly
+        return $energyUsed > $energyMax;
     }
 
     /**

@@ -368,7 +368,13 @@ class BotTick extends Command
             }
 
             // --- Phase 4: Queue ship/defense production ---
-            $shipDecision = $this->brain->nextShip($planet, $user);
+            // ENERGY GATE: When energy is negative, skip ship production.
+            // Ships drain metal, preventing bots from affording Solar Plant/Fusion Reactor.
+            // This breaks the energy death spiral: energy stays negative → halved production → can't afford energy buildings.
+            $shipDecision = null;
+            if (!$this->brain->isEnergyNegative($planet)) {
+                $shipDecision = $this->brain->nextShip($planet, $user);
+            }
 
             if ($shipDecision !== null) {
                 $shipId = $shipDecision['ship_id'];
