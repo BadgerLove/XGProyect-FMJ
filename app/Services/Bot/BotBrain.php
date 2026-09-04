@@ -730,6 +730,9 @@ class BotBrain
         209 => 3,    // Recycler
     ];
 
+    /** Below this many probes (owned + queued) a raider/balanced planet restocks before anything else. */
+    private const PROBE_FLOOR = 5;
+
     public function nextShip(array $planet, array $user): ?array
     {
         $hangarLevel = (int) ($planet['building_hangar'] ?? 0);
@@ -764,6 +767,24 @@ class BotBrain
 
                 if ($count >= 1) {
                     return ['ship_id' => 212, 'count' => $count, 'cost' => $cost];
+                }
+            }
+        }
+
+        // ─── Probe floor: raiders/balanced can't spy (or attack) without probes ──
+        // The threat analyser's counter-build list has no probes and every neighbourhood
+        // reads as "medium+" with 365 armed bots, so probes were never restocked.
+        if ($personality !== 'turtle' && $personality !== 'passive') {
+            $hangarQueue = $this->parseHangarQueue($planet['planet_b_hangar_id'] ?? '');
+            $probeTotal = (int) ($planet['ship_espionage_probe'] ?? 0) + ($hangarQueue[210] ?? 0);
+
+            if ($probeTotal < self::PROBE_FLOOR) {
+                $cost = $this->getShipCost(210);
+                $affordable = (int) floor((float) ($planet['planet_crystal'] ?? 0) / $cost['crystal']);
+                $count = min(self::SHIP_CAPS[210] - $probeTotal, $affordable);
+
+                if ($count >= 1) {
+                    return ['ship_id' => 210, 'count' => $count, 'cost' => $cost];
                 }
             }
         }

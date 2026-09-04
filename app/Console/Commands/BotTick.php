@@ -23,6 +23,7 @@ use App\Services\Game\ResearchQueueService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Xgp\App\Core\Concerns\PreparesLegacySql;
+use Xgp\App\Core\Enumerators\MissionsEnumerator as Missions;
 use Xgp\App\Libraries\UpdatesLibrary;
 
 /**
@@ -34,6 +35,9 @@ use Xgp\App\Libraries\UpdatesLibrary;
 class BotTick extends Command
 {
     use PreparesLegacySql;
+
+    /** Fleet slots to leave free for spying/attacking when sending expeditions. */
+    private const EXPEDITION_KEEP_FREE_SLOTS = 2;
 
     protected $signature = 'bot:tick {--dry-run : Show what would happen without saving}';
 
@@ -542,50 +546,8 @@ class BotTick extends Command
                 }
             }
 
-            // ─── Expedition dispatch ───────────────────────────
-            // Bots with Astrophysics can send expeditions to slot 16.
-            // Uses idle ships, doubles as fleet save when ships are away.
-            $astroLevel = (int) ($user['research_astrophysics'] ?? 0);
-            if ($astroLevel >= 1) {
-                $maxExpeditions = $astroLevel; // 1 slot per Astro level
-                $activeExpeditions = $this->dispatcher->countActiveExpeditions((int) $bot->id);
-                $availableSlots = $maxExpeditions - $activeExpeditions;
-
-                if ($availableSlots > 0
-                    && !$this->dispatcher->hasActiveFleetFromPlanet($planet['planet_galaxy'], $planet['planet_system'], $planet['planet_planet'])
-                ) {
-                    $expFleet = $this->buildExpeditionFleet($planet);
-
-                    if (!empty($expFleet)) {
-                        // Pick a system to send expedition to — rotate around home system
-                        $expSystem = $this->pickExpeditionSystem((int) $planet['planet_galaxy'], (int) $planet['planet_system'], (int) $bot->id);
-
-                        // Duration: short during active hours, long overnight (fleet save)
-                        $profile = json_decode($bot->bot_profile ?? '{}', true);
-                        $stayDuration = $this->pickExpeditionDuration($profile);
-
-                        if (!$dryRun) {
-                            $fleetId = $this->dispatcher->sendExpedition(
-                                $planet,
-                                $user,
-                                (int) $planet['planet_galaxy'],
-                                $expSystem,
-                                $expFleet,
-                                $stayDuration
-                            );
-
-                            if ($fleetId) {
-                                $result['expeditions']++;
-                                $hours = round($stayDuration / 3600, 1);
-                                $this->line("  [{$bot->id}] {$bot->name}: expedition → {$planet['planet_galaxy']}:{$expSystem}:16 ({$hours}h)");
-                            }
-                        } else {
-                            $hours = round($stayDuration / 3600, 1);
-                            $this->line("  [{$bot->id}] {$bot->name}: would send expedition → {$planet['planet_galaxy']}:{$expSystem}:16 ({$hours}h)");
-                        }
-                    }
-                }
-            }
+            // (Expedition dispatch moved after Phase 5 — see sendExpeditions(). Sending it here
+            //  parked a fleet on the home planet before the spy/attack phase ever ran.)
 
             // Track best attack origin — moons preferred (stealthier)
             $combatShips = (int) ($planet['ship_light_fighter'] ?? 0)
@@ -647,7 +609,15 @@ class BotTick extends Command
         $planet = $attackMoon ?? $attackPlanet ?? (array) $planetRows[0];
         $personality = $this->brain->getPersonality($user);
 
-        if ($personality !== 'passive' && !$this->dispatcher->hasActiveFleetFromPlanet($planet['planet_galaxy'], $planet['planet_system'], $planet['planet_planet'])) {
+        // Only a spy/attack already in flight from this origin blocks the phase. Expeditions,
+        // transports etc. used to block it too, which kept raiders from ever probing.
+        $originBusy = $this->dispatcher->hasActiveFleetFromPlanet(
+            (int) $planet['planet_galaxy'], (int) $planet['planet_system'], (int) $planet['planet_planet'],
+            (int) ($planet['planet_type'] ?? 1),
+            [Missions::ATTACK, Missions::SPY]
+        );
+
+        if ($personality !== 'passive' && !$originBusy) {
             // Scan for nearby targets
             $targets = $this->scanner->scan($planet, 5);
             $probes = (int) ($planet['ship_espionage_probe'] ?? 0);
@@ -844,7 +814,96 @@ class BotTick extends Command
             }
         }
 
+        // --- Phase 6: Expeditions (only if the spy/attack phase found nothing to do) ---
+        if (!$result['spied'] && !$result['attacked']) {
+            $result['expeditions'] = $this->sendExpeditions($bot, $user, $planetRows, $dryRun);
+        }
+
         return $result;
+    }
+
+    /**
+     * Send expeditions from idle planets. Runs AFTER the spy/attack phase so raiding always
+     * gets first call on the fleet. Respects the game's expedition and fleet-slot limits and
+     * keeps 2 fleet slots free for spying/attacking.
+     *
+     * @param  array<int, object>  $planetRows
+     * @return int  Expeditions sent (or that would be sent in dry-run)
+     */
+    private function sendExpeditions(User $bot, array $user, array $planetRows, bool $dryRun): int
+    {
+        $astroLevel = (int) ($user['research_astrophysics'] ?? 0);
+        if ($astroLevel < 1) {
+            return 0;
+        }
+
+        $maxExpeditions = \Xgp\App\Libraries\FleetsLib::getMaxExpeditions($astroLevel);
+        $availableSlots = $maxExpeditions - $this->dispatcher->countActiveExpeditions((int) $bot->id);
+        if ($availableSlots <= 0) {
+            return 0;
+        }
+
+        $maxFleets = \Xgp\App\Libraries\FleetsLib::getMaxFleets(
+            (int) ($user['research_computer_technology'] ?? 0),
+            (int) ($user['premium_officier_admiral'] ?? 0)
+        );
+        $freeFleetSlots = $maxFleets - $this->dispatcher->countActiveFleets((int) $bot->id);
+
+        $profile = json_decode((string) ($bot->bot_profile ?? '{}'), true);
+        $sent = 0;
+
+        foreach ($planetRows as $planetRow) {
+            if ($availableSlots <= 0 || $freeFleetSlots < self::EXPEDITION_KEEP_FREE_SLOTS + 1) {
+                break;
+            }
+
+            $planet = (array) $planetRow;
+
+            if ($this->dispatcher->hasActiveFleetFromPlanet(
+                (int) $planet['planet_galaxy'], (int) $planet['planet_system'], (int) $planet['planet_planet'],
+                (int) ($planet['planet_type'] ?? 1)
+            )) {
+                continue;
+            }
+
+            $expFleet = $this->buildExpeditionFleet($planet);
+            if (empty($expFleet)) {
+                continue;
+            }
+
+            // Pick a system to send expedition to — rotate around home system
+            $expSystem = $this->pickExpeditionSystem((int) $planet['planet_galaxy'], (int) $planet['planet_system'], (int) $bot->id);
+
+            // Duration: short during active hours, long overnight (fleet save)
+            $stayDuration = $this->pickExpeditionDuration($profile);
+            $hours = round($stayDuration / 3600, 1);
+
+            if ($dryRun) {
+                $this->line("  [{$bot->id}] {$bot->name}: would send expedition → {$planet['planet_galaxy']}:{$expSystem}:16 ({$hours}h)");
+                $sent++;
+                $availableSlots--;
+                $freeFleetSlots--;
+                continue;
+            }
+
+            $fleetId = $this->dispatcher->sendExpedition(
+                $planet,
+                $user,
+                (int) $planet['planet_galaxy'],
+                $expSystem,
+                $expFleet,
+                $stayDuration
+            );
+
+            if ($fleetId) {
+                $this->line("  [{$bot->id}] {$bot->name}: expedition → {$planet['planet_galaxy']}:{$expSystem}:16 ({$hours}h)");
+                $sent++;
+                $availableSlots--;
+                $freeFleetSlots--;
+            }
+        }
+
+        return $sent;
     }
     /**
      * Queue ship/defense production via the hangar system.

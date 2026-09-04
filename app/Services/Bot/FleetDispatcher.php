@@ -593,17 +593,35 @@ class FleetDispatcher
     }
 
     /**
-     * Check if a specific planet has an outbound fleet.
+     * Count all fleets a bot currently has flying (any mission).
      */
-    public function hasActiveFleetFromPlanet(int $galaxy, int $system, int $planet, int $type = 1): bool
+    public function countActiveFleets(int $userId): int
     {
-        return DB::table('fleets')
+        return (int) DB::table('fleets')
+            ->where('fleet_owner', $userId)
+            ->where('fleet_mess', 0)
+            ->count();
+    }
+
+    /**
+     * Check if a specific planet has an outbound fleet.
+     *
+     * @param  array<int, int>|null  $missions  Restrict to these mission ids (null = any mission)
+     */
+    public function hasActiveFleetFromPlanet(int $galaxy, int $system, int $planet, int $type = 1, ?array $missions = null): bool
+    {
+        $query = DB::table('fleets')
             ->where('fleet_start_galaxy', $galaxy)
             ->where('fleet_start_system', $system)
             ->where('fleet_start_planet', $planet)
             ->where('fleet_start_type', $type)
-            ->where('fleet_mess', 0)
-            ->exists();
+            ->where('fleet_mess', 0);
+
+        if ($missions !== null) {
+            $query->whereIn('fleet_mission', $missions);
+        }
+
+        return $query->exists();
     }
 
     /**
