@@ -225,7 +225,35 @@ class BotTick extends Command
         $this->info("  Skipped (sleeping): {$stats['skipped']}");
         $this->info("  Errors: {$stats['errors']}");
 
+        $this->appendTickLog($stats, $elapsed, (bool) $dryRun);
+
         return self::SUCCESS;
+    }
+
+    /**
+     * Append a one-line summary of this tick to storage/logs/bot-tick-YYYY-MM.log.
+     *
+     * The scheduled task discards stdout, so until 2026-09-04 nobody could see that the
+     * tick had been reporting 0 buildings / 0 ships / 0 research for a month. This line is
+     * what `bot:health` reads. Dry runs are tagged DRY so the watchdog can ignore them.
+     * Never throws — a logging failure must not fail the tick.
+     */
+    private function appendTickLog(array $stats, float $elapsed, bool $dryRun): void
+    {
+        try {
+            $line = sprintf(
+                "%s | %sprocessed=%d skipped=%d built=%d ships=%d research=%d attacks=%d spies=%d saves=%d expeditions=%d errors=%d | idle_planets=%d escalated=%d stuck=%d | %.1fs\n",
+                date('Y-m-d H:i:s'),
+                $dryRun ? 'DRY ' : '',
+                $stats['processed'], $stats['skipped'], $stats['built'], $stats['ships'], $stats['researches'],
+                $stats['attacks'], $stats['spies'], $stats['fleet_saves'], $stats['expeditions'], $stats['errors'],
+                $stats['idle_planets'] ?? 0, $stats['escalated'] ?? 0, $stats['stuck'] ?? 0,
+                $elapsed
+            );
+            file_put_contents(storage_path('logs/bot-tick-' . date('Y-m') . '.log'), $line, FILE_APPEND | LOCK_EX);
+        } catch (\Throwable $e) {
+            $this->warn('Tick log write failed: ' . $e->getMessage());
+        }
     }
 
     /**
