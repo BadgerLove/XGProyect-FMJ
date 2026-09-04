@@ -16,6 +16,7 @@ use App\Services\Bot\FleetDispatcher;
 use App\Services\Bot\FleetProtector;
 use App\Services\Bot\GrudgeService;
 use App\Services\Bot\IntelService;
+use App\Services\Bot\PlanetLadder;
 use App\Services\Bot\ResourceTrader;
 use App\Services\Bot\TargetScanner;
 use App\Services\Game\BuildingQueueService;
@@ -39,7 +40,9 @@ class BotTick extends Command
     /** Fleet slots to leave free for spying/attacking when sending expeditions. */
     private const EXPEDITION_KEEP_FREE_SLOTS = 2;
 
-    protected $signature = 'bot:tick {--dry-run : Show what would happen without saving}';
+    protected $signature = 'bot:tick
+        {--dry-run : Show what would happen without saving}
+        {--ladder-assume-idle=0 : DRY RUN ONLY — pretend every idle planet has already been idle this many ticks, to preview the ladder}';
 
     protected $description = 'Process bot accounts: tick resources, build, research, attack';
 
@@ -58,6 +61,7 @@ class BotTick extends Command
         private readonly GrudgeService $grudge,
         private readonly ColonizationService $colonizer,
         private readonly HarvestService $harvester,
+        private readonly PlanetLadder $ladder,
     ) {
         parent::__construct();
     }
@@ -147,7 +151,20 @@ class BotTick extends Command
 
         $this->info("Processing {$bots->count()} bots..." . ($dryRun ? ' (DRY RUN)' : ''));
 
-        $stats = ['processed' => 0, 'built' => 0, 'ships' => 0, 'researches' => 0, 'attacks' => 0, 'spies' => 0, 'fleet_saves' => 0, 'expeditions' => 0, 'skipped' => 0, 'errors' => 0];
+        $stats = ['processed' => 0, 'built' => 0, 'ships' => 0, 'researches' => 0, 'attacks' => 0, 'spies' => 0, 'fleet_saves' => 0, 'expeditions' => 0, 'skipped' => 0, 'errors' => 0, 'idle_planets' => 0, 'escalated' => 0, 'stuck' => 0];
+
+        if ($this->ladder->isEnabled()) {
+            $assume = (int) $this->option('ladder-assume-idle');
+            if ($assume > 0 && !$dryRun) {
+                $this->error('--ladder-assume-idle is only allowed with --dry-run');
+                return self::FAILURE;
+            }
+            if ($assume > 0) {
+                $this->warn("  Ladder preview: treating idle planets as already {$assume} ticks idle");
+            }
+        } else {
+            $this->warn('  Idle ladder disabled: table ' . PlanetLadder::TABLE . ' missing (run migrations)');
+        }
 
         foreach ($bots as $bot) {
             try {
@@ -172,6 +189,10 @@ class BotTick extends Command
                 if ($result['expeditions'] > 0) {
                     $stats['expeditions'] += $result['expeditions'];
                 }
+
+                $stats['idle_planets'] += $result['idle_planets'];
+                $stats['escalated'] += $result['escalated'];
+                $stats['stuck'] += $result['stuck'];
 
                 if ($result['built']) {
                     $stats['built']++;
@@ -226,6 +247,7 @@ class BotTick extends Command
         $this->info("  Spy missions: {$stats['spies']}");
         $this->info("  Fleet saves: {$stats['fleet_saves']}");
         $this->info("  Expeditions sent: {$stats['expeditions']}");
+        $this->info("  Idle planets: {$stats['idle_planets']} (ladder fired: {$stats['escalated']}, stuck: {$stats['stuck']})");
         $this->info("  Skipped (sleeping): {$stats['skipped']}");
         $this->info("  Errors: {$stats['errors']}");
 
@@ -271,6 +293,7 @@ class BotTick extends Command
             'built' => false, 'ship_built' => false, 'attacked' => false, 'spied' => false, 'fleet_saved' => false, 'expeditions' => 0,
             'building' => null, 'ship' => null, 'research' => null,
             'attack_target' => null, 'spy_target' => null,
+            'idle_planets' => 0, 'escalated' => 0, 'stuck' => 0,
         ];
 
         // Load ALL planets for this bot (not just first)
@@ -377,7 +400,9 @@ class BotTick extends Command
             }
 
             // --- Phase 3: Queue next building (reuse cached model) ---
-            if ($planetModel && $planetModel->buildingQueue()->count() === 0) {
+            $buildingId = null;
+            $buildingQueueEmpty = $planetModel && $planetModel->buildingQueue()->count() === 0;
+            if ($buildingQueueEmpty) {
                 $buildingId = $this->brain->nextBuilding($planet, $user);
 
                 if ($buildingId !== null && !$dryRun) {
@@ -424,10 +449,13 @@ class BotTick extends Command
             }
 
             // Queue research (once per bot, from first planet with a lab)
+            $isResearchPlanet = false;
+            $researchId = null;
             if (!$researchQueued) {
                 $labLevel = (int) ($planet['building_laboratory'] ?? 0);
 
                 if ($labLevel >= 1 && $planetModel) {
+                    $isResearchPlanet = true;
                     $researchId = $this->brain->nextResearch($user, $planet);
 
                     if ($researchId !== null && !$dryRun) {
@@ -441,6 +469,70 @@ class BotTick extends Command
                         $result['research'] = 'research queued';
                     }
                     $researchQueued = true;
+                }
+            }
+
+            // --- Phase 3.5: Idle ladder (self-healing) ---
+            // Idle = the economy is stuck: nothing building and the brain chose nothing, and on
+            // the research planet nothing researching and nothing chosen. Ships deliberately
+            // don't count — cheap fighters get queued every tick while the crystal wall stands.
+            $ladderActive = $this->ladder->isEnabled() || ($dryRun && (int) $this->option('ladder-assume-idle') > 0);
+            if ($planetModel && $ladderActive && ((int) ($planet['planet_type'] ?? 1)) !== 3) {
+                $researchIdle = !$isResearchPlanet
+                    || ((int) ($user['research_current_research'] ?? 0) === 0 && $researchId === null);
+                $idle = $buildingQueueEmpty && $buildingId === null && $researchIdle;
+
+                $state = $this->ladder->recordTick((int) $planet['planet_id'], $idle, time(), $dryRun);
+                if ($idle && $dryRun) {
+                    $state['idle_ticks'] = max($state['idle_ticks'], (int) $this->option('ladder-assume-idle'));
+                }
+
+                if ($idle) {
+                    $result['idle_planets']++;
+                    $rung = $this->ladder->dueRung($state);
+
+                    if ($rung === 1) {
+                        $trade = $this->ladder->planMerchantTrade($planet);
+                        $coords = "{$planet['planet_galaxy']}:{$planet['planet_system']}:{$planet['planet_planet']}";
+
+                        if ($trade === null) {
+                            $this->line("  [{$bot->id}] {$bot->name}: ladder rung 1 on {$coords} — nothing to sell (idle {$state['idle_ticks']} ticks)");
+                        } elseif ($dryRun) {
+                            $after = $planet;
+                            $after[$trade['sell_resource']] -= $trade['sell'];
+                            $after['planet_crystal'] += $trade['crystal_gain'];
+                            $wouldBuild = $this->brain->nextBuilding($after, $user);
+                            $wouldResearch = $isResearchPlanet ? $this->brain->nextResearch($user, $after) : null;
+                            $this->line("  [{$bot->id}] {$bot->name}: would {$trade['note']} on {$coords} → build:"
+                                . ($wouldBuild !== null ? $this->getBuildingName($wouldBuild) : '-')
+                                . ' research:' . ($wouldResearch !== null ? "#{$wouldResearch}" : '-'));
+                            $result['escalated']++;
+                        } else {
+                            $this->ladder->applyMerchantTrade($planet, $trade, time());
+                            $result['escalated']++;
+                            $this->line("  [{$bot->id}] {$bot->name}: ladder {$trade['note']} on {$coords}");
+
+                            // Spend it now: re-run building, then research, with the new balance
+                            $planetModel->refresh();
+                            $this->syncPlanetFromModel($planet, $planetModel);
+                            $retryBuilding = $this->brain->nextBuilding($planet, $user);
+                            if ($retryBuilding !== null && $this->queueService->add($planetModel, $user, $retryBuilding, 'build')) {
+                                $result['built'] = true;
+                                $result['building'] = $this->getBuildingName($retryBuilding);
+                                $planetModel->refresh();
+                                $this->syncPlanetFromModel($planet, $planetModel);
+                            }
+                            if ($isResearchPlanet && $result['research'] === null) {
+                                $retryResearch = $this->brain->nextResearch($user, $planet);
+                                if ($retryResearch !== null) {
+                                    $technocrateActive = (int) ($user['premium_officier_technocrat'] ?? 0) > time();
+                                    if ($this->researchQueueService->add($bot, $planetModel, $user, $retryResearch, $technocrateActive)) {
+                                        $result['research'] = 'research queued';
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
