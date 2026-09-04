@@ -385,26 +385,41 @@ class BotBrain
     /**
      * Check if planet has negative energy (need more solar/fusion).
      *
-     * planet_energy_used in the DB stores NET energy (production minus consumption).
-     * Negative value means consumption exceeds production — energy deficit.
-     * Also handles the case where used is stored as raw consumption (positive, > max).
+     * Game convention (UpdatesLibrary / ProductionService::maxProductionPercentage):
+     * planet_energy_max  = production (solar + fusion + satellites), positive
+     * planet_energy_used = consumption, stored NEGATIVE
+     * Net energy = max + used. Deficit when net < 0.
      */
     public function isEnergyNegative(array $planet): bool
+    {
+        return $this->energyDeficit($planet) > 0;
+    }
+
+    /**
+     * How much energy the planet is short by (0 when in surplus).
+     */
+    public function energyDeficit(array $planet): int
     {
         $energyMax = (int) ($planet['planet_energy_max'] ?? 0);
         $energyUsed = (int) ($planet['planet_energy_used'] ?? 0);
 
         if ($energyMax <= 0) {
-            return false; // No production at all — can't be negative
+            return 0; // No production at all (moon / fresh planet) — nothing to fix
         }
 
-        // DB stores net energy: negative = deficit, so used < 0 means negative
-        if ($energyUsed < 0) {
-            return true;
-        }
+        $net = $energyMax + $energyUsed;
 
-        // Legacy: if used is stored as raw consumption (positive), compare directly
-        return $energyUsed > $energyMax;
+        return $net < 0 ? -$net : 0;
+    }
+
+    /**
+     * Energy one Solar Satellite gives on this planet (GameObjectRegistry formula).
+     */
+    public function satelliteEnergy(array $planet): int
+    {
+        $temp = (float) ($planet['planet_temp_max'] ?? 0);
+
+        return max(1, (int) floor(($temp + 140) / 6));
     }
 
     /**
@@ -710,7 +725,7 @@ class BotBrain
         404 => 10,   // Gauss Cannon
         405 => 5,    // Ion Cannon
         502 => 3,    // Small Shield Dome
-        212 => 5,    // Solar Satellite
+        212 => 120,  // Solar Satellite — ~32 energy each at 50°C; a 1,200 deficit needs ~40
         208 => 1,    // Colony Ship — only ever need 1
         209 => 3,    // Recycler
     ];
@@ -724,6 +739,34 @@ class BotBrain
         }
 
         $personality = $this->getPersonality($user);
+
+        // ─── Energy first: Solar Satellites are the cheap fix for a deficit ──
+        // (2,000 crystal + 500 deut each vs. 250K+ crystal for the next Solar Plant level).
+        // Replaces the old blanket "no ships while energy is negative" gate.
+        $deficit = $this->energyDeficit($planet);
+        if ($deficit > 0 && !$this->isMoon($planet)) {
+            $hangarQueue = $this->parseHangarQueue($planet['planet_b_hangar_id'] ?? '');
+            $existing = (int) ($planet['ship_solar_satellite'] ?? 0);
+            $queued = $hangarQueue[212] ?? 0;
+            $needed = (int) ceil($deficit / $this->satelliteEnergy($planet)) - $queued;
+            $room = self::SHIP_CAPS[212] - $existing - $queued;
+            $needed = min($needed, $room, 20);
+
+            if ($needed >= 1) {
+                $cost = $this->getShipCost(212);
+                $crystal = (float) ($planet['planet_crystal'] ?? 0);
+                $deuterium = (float) ($planet['planet_deuterium'] ?? 0);
+                $affordable = min(
+                    (int) floor($crystal / $cost['crystal']),
+                    (int) floor($deuterium / $cost['deuterium'])
+                );
+                $count = min($needed, $affordable);
+
+                if ($count >= 1) {
+                    return ['ship_id' => 212, 'count' => $count, 'cost' => $cost];
+                }
+            }
+        }
 
         // Analyze neighborhood threats for counter-building
         $threats = $this->threatAnalyzer->analyzeThreats($planet);
@@ -1341,6 +1384,9 @@ class BotBrain
             120 => ['metal' => 200,   'crystal' => 100,   'deuterium' => 0,     'factor' => 2.0],
             121 => ['metal' => 1000,  'crystal' => 300,   'deuterium' => 100,   'factor' => 2.0],
             122 => ['metal' => 2000,  'crystal' => 4000,  'deuterium' => 1000,  'factor' => 2.0],
+            114 => ['metal' => 0,     'crystal' => 4000,  'deuterium' => 2000,  'factor' => 2.0],  // Hyperspace Tech (was missing → never affordable)
+            124 => ['metal' => 4000,  'crystal' => 8000,  'deuterium' => 4000,  'factor' => 1.75], // Astrophysics (was missing → never affordable)
+            // 199 Graviton deliberately absent: costs 300K energy, not resources
         ];
 
         $base = $baseCosts[$researchId] ?? null;
