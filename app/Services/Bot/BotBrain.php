@@ -718,7 +718,7 @@ class BotBrain
      * Prevents bots from spamming hundreds of cheap ships.
      */
     private const SHIP_CAPS = [
-        210 => 10,   // Espionage Probe — 10 is plenty for scouting
+        210 => 30,   // Espionage Probe — 3 probes × 3 spy missions per tick (5 Sep), so 30 in stock
         401 => 50,   // Rocket Launcher — cap for passive bots
         402 => 30,   // Light Laser
         403 => 15,   // Heavy Laser
@@ -731,7 +731,7 @@ class BotBrain
     ];
 
     /** Below this many probes (owned + queued) a raider/balanced planet restocks before anything else. */
-    private const PROBE_FLOOR = 5;
+    private const PROBE_FLOOR = 15;  // was 5; a tick now spends up to 9 probes (3 targets × 3 probes)
 
     public function nextShip(array $planet, array $user): ?array
     {

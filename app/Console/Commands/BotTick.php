@@ -717,13 +717,18 @@ class BotTick extends Command
             // SPY PHASE: Send probes to multiple targets to gather intel
             $spiedCount = 0;
             $maxSpyPerTick = 3;
+            // Probes per spy mission. legacy/app/Libraries/Missions/Spy.php shows a report section only when
+            // probes_sent >= need - gap², need = 1 resources / 2 fleet / 3 defence / 5 buildings. All bots sit at
+            // espionage 8-9 (gap 0-1), so a single probe reported resources only and the simulator saw an
+            // undefended planet -> 85 % of raids lost (5 Sep). Three probes always show fleet + defence.
+            $probesPerSpy = 3;
 
             if ($probes > 0 && !empty($targets)) {
                 foreach ($targets as $spyTarget) {
                     if ($spiedCount >= $maxSpyPerTick) break;
 
                     if (!$dryRun) {
-                        $fleetId = $this->dispatcher->sendSpy($planet, $user, $spyTarget, 1);
+                        $fleetId = $this->dispatcher->sendSpy($planet, $user, $spyTarget, $probesPerSpy);
                         if ($fleetId) {
                             $result['spied'] = true;
                             $result['spy_target'] = "{$spyTarget['galaxy']}:{$spyTarget['system']}:{$spyTarget['planet']}";
@@ -835,7 +840,7 @@ class BotTick extends Command
             if ($bestTarget !== null) {
                 $intelAge = time() - ($bestTarget['scanned_at'] ?? 0);
                 if ($intelAge > 1800 && !$dryRun) {
-                    $this->dispatcher->sendSpy($planet, $user, $bestTarget);
+                    $this->dispatcher->sendSpy($planet, $user, $bestTarget, $probesPerSpy);
                     $result['spied'] = true;
                     $result['spy_target'] = "{$bestTarget['galaxy']}:{$bestTarget['system']}:{$bestTarget['planet']} (refresh)";
                 } else {
