@@ -40,6 +40,18 @@ class BotTick extends Command
     /** Fleet slots to leave free for spying/attacking when sending expeditions. */
     private const EXPEDITION_KEEP_FREE_SLOTS = 2;
 
+    /** Don't re-probe a planet scanned more recently than this (seconds). */
+    private const SPY_REFRESH_SECONDS = 1800;
+
+    /** Intel older than this is re-spied instead of attacked on (seconds). */
+    private const INTEL_MAX_AGE = 7200;
+
+    /** How many intel targets (richest first) to run through the battle engine per bot per tick. */
+    private const ATTACK_CANDIDATES = 8;
+
+    /** Ignore intel targets holding less than this much in total — not worth the fuel or the risk. */
+    private const ATTACK_MIN_RESOURCES = 50_000;
+
     protected $signature = 'bot:tick
         {--dry-run : Show what would happen without saving}
         {--ladder-assume-idle=0 : DRY RUN ONLY — pretend every idle planet has already been idle this many ticks, to preview the ladder}';
@@ -151,7 +163,7 @@ class BotTick extends Command
 
         $this->info("Processing {$bots->count()} bots..." . ($dryRun ? ' (DRY RUN)' : ''));
 
-        $stats = ['processed' => 0, 'built' => 0, 'ships' => 0, 'researches' => 0, 'attacks' => 0, 'spies' => 0, 'fleet_saves' => 0, 'expeditions' => 0, 'skipped' => 0, 'errors' => 0, 'idle_planets' => 0, 'escalated' => 0, 'stuck' => 0];
+        $stats = ['processed' => 0, 'built' => 0, 'ships' => 0, 'researches' => 0, 'attacks' => 0, 'spies' => 0, 'fleet_saves' => 0, 'expeditions' => 0, 'skipped' => 0, 'errors' => 0, 'idle_planets' => 0, 'escalated' => 0, 'stuck' => 0, 'reserved' => 0];
 
         if ($this->ladder->isEnabled()) {
             $assume = (int) $this->option('ladder-assume-idle');
@@ -193,6 +205,7 @@ class BotTick extends Command
                 $stats['idle_planets'] += $result['idle_planets'];
                 $stats['escalated'] += $result['escalated'];
                 $stats['stuck'] += $result['stuck'];
+                $stats['reserved'] += $result['reserved'];
 
                 if ($result['built']) {
                     $stats['built']++;
@@ -248,6 +261,7 @@ class BotTick extends Command
         $this->info("  Fleet saves: {$stats['fleet_saves']}");
         $this->info("  Expeditions sent: {$stats['expeditions']}");
         $this->info("  Idle planets: {$stats['idle_planets']} (ladder fired: {$stats['escalated']}, stuck: {$stats['stuck']})");
+        $this->info("  Planets saving for a building (ships held back): {$stats['reserved']}");
         $this->info("  Skipped (sleeping): {$stats['skipped']}");
         $this->info("  Errors: {$stats['errors']}");
 
@@ -268,12 +282,12 @@ class BotTick extends Command
     {
         try {
             $line = sprintf(
-                "%s | %sprocessed=%d skipped=%d built=%d ships=%d research=%d attacks=%d spies=%d saves=%d expeditions=%d errors=%d | idle_planets=%d escalated=%d stuck=%d | %.1fs\n",
+                "%s | %sprocessed=%d skipped=%d built=%d ships=%d research=%d attacks=%d spies=%d saves=%d expeditions=%d errors=%d | idle_planets=%d escalated=%d stuck=%d reserved=%d | %.1fs\n",
                 date('Y-m-d H:i:s'),
                 $dryRun ? 'DRY ' : '',
                 $stats['processed'], $stats['skipped'], $stats['built'], $stats['ships'], $stats['researches'],
                 $stats['attacks'], $stats['spies'], $stats['fleet_saves'], $stats['expeditions'], $stats['errors'],
-                $stats['idle_planets'] ?? 0, $stats['escalated'] ?? 0, $stats['stuck'] ?? 0,
+                $stats['idle_planets'] ?? 0, $stats['escalated'] ?? 0, $stats['stuck'] ?? 0, $stats['reserved'] ?? 0,
                 $elapsed
             );
             file_put_contents(storage_path('logs/bot-tick-' . date('Y-m') . '.log'), $line, FILE_APPEND | LOCK_EX);
@@ -293,7 +307,7 @@ class BotTick extends Command
             'built' => false, 'ship_built' => false, 'attacked' => false, 'spied' => false, 'fleet_saved' => false, 'expeditions' => 0,
             'building' => null, 'ship' => null, 'research' => null,
             'attack_target' => null, 'spy_target' => null,
-            'idle_planets' => 0, 'escalated' => 0, 'stuck' => 0,
+            'idle_planets' => 0, 'escalated' => 0, 'stuck' => 0, 'reserved' => 0,
         ];
 
         // Load ALL planets for this bot (not just first)
@@ -429,7 +443,35 @@ class BotTick extends Command
             // returns Solar Satellites first (cheap crystal/deut, no metal). The old blanket
             // "skip all ships while energy is negative" gate (Aug 9) is gone — combined with the
             // inverted isEnergyNegative() sign it silenced ship production on every planet.
-            $shipDecision = $this->brain->nextShip($planet, $user);
+            //
+            // Building reserve (6 Sep): if the building phase wanted something it could not
+            // afford, the shipyard may only spend what is left above that building's cost.
+            // Otherwise cruisers/fighters ate every spare crystal each tick and the 250-460K
+            // crystal buildings were never reached (140-190 idle planets overnight). Capped at
+            // two days of the planet's own production so an out-of-reach building (Nanites)
+            // cannot freeze the hangar for a week; the merchant ladder does the rest.
+            $reserve = [];
+            if ($buildingQueueEmpty && $buildingId === null && ((int) ($planet['planet_type'] ?? 1)) !== 3) {
+                $wanted = $this->brain->wantedBuildingCost($planet, $user);
+                if ($wanted !== null) {
+                    foreach (['metal', 'crystal', 'deuterium'] as $res) {
+                        $cap = 48 * (float) ($planet["planet_{$res}_perhour"] ?? 0);
+                        $reserve[$res] = min((float) $wanted[$res], max($cap, 100_000.0));
+                    }
+                    $result['reserved']++;
+                    if ($dryRun) {
+                        $this->line(sprintf(
+                            "  [%d] %s: saving for %s on %d:%d:%d (reserve %dK/%dK/%dK, has %dK/%dK/%dK)",
+                            $bot->id, $bot->name, $this->getBuildingName((int) $wanted['building_id']),
+                            $planet['planet_galaxy'], $planet['planet_system'], $planet['planet_planet'],
+                            $reserve['metal'] / 1000, $reserve['crystal'] / 1000, $reserve['deuterium'] / 1000,
+                            ($planet['planet_metal'] ?? 0) / 1000, ($planet['planet_crystal'] ?? 0) / 1000, ($planet['planet_deuterium'] ?? 0) / 1000
+                        ));
+                    }
+                }
+            }
+
+            $shipDecision = $this->brain->nextShip($planet, $user, $reserve);
 
             if ($shipDecision !== null) {
                 $shipId = $shipDecision['ship_id'];
@@ -714,6 +756,14 @@ class BotTick extends Command
             $targets = $this->scanner->scan($planet, 5);
             $probes = (int) ($planet['ship_espionage_probe'] ?? 0);
 
+            // Intel we already hold (newest scan first per planet) — drives both phases below.
+            $intelData = $this->intel->getAllIntel($bot->id);
+            $latestScan = [];
+            foreach ($intelData as $row) {
+                $key = "{$row['galaxy']}:{$row['system']}:{$row['planet']}";
+                $latestScan[$key] = max($latestScan[$key] ?? 0, (int) $row['scanned_at']);
+            }
+
             // SPY PHASE: Send probes to multiple targets to gather intel
             $spiedCount = 0;
             $maxSpyPerTick = 3;
@@ -723,34 +773,45 @@ class BotTick extends Command
             // undefended planet -> 85 % of raids lost (5 Sep). Three probes always show fleet + defence.
             $probesPerSpy = 3;
 
-            if ($probes > 0 && !empty($targets)) {
+            if ($probes >= $probesPerSpy && !empty($targets)) {
                 foreach ($targets as $spyTarget) {
                     if ($spiedCount >= $maxSpyPerTick) break;
+                    if ($probes - $spiedCount * $probesPerSpy < $probesPerSpy) break;
+
+                    // Don't re-probe a planet we scanned minutes ago: the same top-3 neighbours were
+                    // being hit every tick, and about half of those probe flights get shot down
+                    // (Spy.php: detection chance scales with the target's fleet) — 3K crystal a go.
+                    $key = "{$spyTarget['galaxy']}:{$spyTarget['system']}:{$spyTarget['planet']}";
+                    if (time() - ($latestScan[$key] ?? 0) < self::SPY_REFRESH_SECONDS) {
+                        continue;
+                    }
 
                     if (!$dryRun) {
                         $fleetId = $this->dispatcher->sendSpy($planet, $user, $spyTarget, $probesPerSpy);
                         if ($fleetId) {
                             $result['spied'] = true;
-                            $result['spy_target'] = "{$spyTarget['galaxy']}:{$spyTarget['system']}:{$spyTarget['planet']}";
+                            $result['spy_target'] = $key;
                             $spiedCount++;
                         }
                     } else {
                         $result['spied'] = true;
-                        $result['spy_target'] = "{$spyTarget['galaxy']}:{$spyTarget['system']}:{$spyTarget['planet']}";
+                        $result['spy_target'] = $key;
                         $spiedCount++;
                     }
                 }
             }
+            $probesLeft = $probes - $spiedCount * $probesPerSpy;
 
-            // ATTACK PHASE: Use intel to pick best target and raid
-            $intelData = $this->intel->getAllIntel($bot->id);
-            $bestTarget = null;
-            $useIntel = false;
+            // ATTACK PHASE: walk the intel from richest down and raid the first target the battle
+            // engine says we beat. Until 6 Sep only the single richest entry was ever tried (with a
+            // fixed 65-ship raid), so one fat neighbour blocked every raid → attacks=0 all night.
+            $attackTarget = null;
+            $attackFleet = null;
+            $staleTarget = null;   // richest candidate whose intel is too old to trust → re-spy it
+            $candidatesTried = 0;
 
-            if ($dryRun && !empty($intelData)) {
-                $this->line("  [{$bot->id}] INTEL: " . count($intelData) . " entries, first_res=" . ($intelData[0]['total_resources'] ?? 0));
-            } elseif ($dryRun) {
-                $this->line("  [{$bot->id}] INTEL: 0 entries");
+            if ($dryRun) {
+                $this->line("  [{$bot->id}] INTEL: " . count($intelData) . " entries");
             }
 
             if (!empty($intelData)) {
@@ -765,7 +826,15 @@ class BotTick extends Command
                     $grudgeTargets[$g['attacker_id']] = $g;
                 }
 
-                usort($intelData, function ($a, $b) use ($grudgeTargets) {
+                // One entry per planet — the newest scan (getAllIntel is newest-first)
+                $latest = [];
+                foreach ($intelData as $row) {
+                    $key = "{$row['galaxy']}:{$row['system']}:{$row['planet']}";
+                    $latest[$key] ??= $row;
+                }
+                $candidates = array_values($latest);
+
+                usort($candidates, function ($a, $b) use ($grudgeTargets) {
                     $aGrudge = $grudgeTargets[$a['user_id'] ?? 0] ?? null;
                     $bGrudge = $grudgeTargets[$b['user_id'] ?? 0] ?? null;
                     $aSeverity = $aGrudge ? ($aGrudge['attack_count'] ?? 0) : 0;
@@ -778,7 +847,11 @@ class BotTick extends Command
                     return $b['total_resources'] <=> $a['total_resources'];
                 });
 
-                foreach ($intelData as $intelTarget) {
+                foreach ($candidates as $intelTarget) {
+                    if ($candidatesTried >= self::ATTACK_CANDIDATES) break;
+
+                    if ($intelTarget['total_resources'] < self::ATTACK_MIN_RESOURCES) continue; // not worth the fuel
+
                     $distance = \Xgp\App\Libraries\FleetsLib::targetDistance(
                         (int) $planet['planet_galaxy'],
                         $intelTarget['galaxy'],
@@ -791,16 +864,16 @@ class BotTick extends Command
                     if ($distance > 5000) continue;
 
                     $defenderId = (int) ($intelTarget['user_id'] ?? 0);
-                    if ($defenderId > 0 && $defenderId != $user['id']) {
+                    if ($defenderId === (int) $user['id']) continue;
+
+                    if ($defenderId > 0) {
                         $defStats = DB::selectOne("SELECT user_statistic_total_points FROM `{$prefix}users_statistics` WHERE `user_statistic_user_id` = ?", [$defenderId]);
                         $defPoints = (int) ($defStats->user_statistic_total_points ?? 0);
 
                         if ($noobLib->isWeak($botPoints, $defPoints) || $noobLib->isStrong($botPoints, $defPoints)) {
                             continue;
                         }
-                    }
 
-                    if ($defenderId > 0) {
                         $recentLosses = DB::table('bot_combat_log')
                             ->where('attacker_id', $bot->id)
                             ->where('defender_id', $defenderId)
@@ -818,95 +891,66 @@ class BotTick extends Command
 
                     $intelTarget['distance'] = $distance;
                     $intelTarget['resources'] = $intelTarget['total_resources'];
-                    $intelTarget['user_id'] = (int) ($intelTarget['user_id'] ?? 0);
+                    $intelTarget['user_id'] = $defenderId;
                     $intelTarget['planet_data'] = $this->buildDefenderFromIntel($intelTarget);
+                    $candidatesTried++;
 
-                    $bestTarget = $intelTarget;
-                    $useIntel = true;
+                    $coords = "{$intelTarget['galaxy']}:{$intelTarget['system']}:{$intelTarget['planet']}";
+                    $intelAge = time() - (int) ($intelTarget['scanned_at'] ?? 0);
 
-                    if ($dryRun) {
-                        $grudgeInfo = '';
-                        if (isset($grudgeTargets[$intelTarget['user_id']])) {
-                            $g = $grudgeTargets[$intelTarget['user_id']];
-                            $grudgeInfo = " GRUDGE:{$g['severity']}({$g['attack_count']}x)";
+                    if ($intelAge > self::INTEL_MAX_AGE) {
+                        $staleTarget ??= $intelTarget;
+                        if ($dryRun) {
+                            $this->line("  [{$bot->id}] STALE: {$coords} res={$intelTarget['total_resources']} age=" . intdiv($intelAge, 60) . "m");
                         }
-                        $this->line("  [{$bot->id}] BEST: G:{$intelTarget['galaxy']}:{$intelTarget['system']}:{$intelTarget['planet']} res={$intelTarget['total_resources']} dist=$distance fleet_def=" . (empty($intelTarget['planet_data']) ? 'EMPTY' : 'OK') . $grudgeInfo);
+                        continue;
                     }
 
-                    break;
+                    $fleet = $this->brain->planAttack($planet, $user, $intelTarget);
+
+                    if ($dryRun) {
+                        $grudgeInfo = isset($grudgeTargets[$defenderId]) ? " GRUDGE({$grudgeTargets[$defenderId]['attack_count']}x)" : '';
+                        $this->line("  [{$bot->id}] TRY: {$coords} res={$intelTarget['total_resources']} dist={$distance} age=" . intdiv($intelAge, 60) . "m"
+                            . $grudgeInfo . ' sim=' . json_encode($this->brain->lastAttackDebug)
+                            . ($fleet !== null ? ' → ATTACK ' . json_encode($fleet) : ''));
+                    }
+
+                    if ($fleet !== null) {
+                        $attackTarget = $intelTarget;
+                        $attackFleet = $fleet;
+                        break;
+                    }
                 }
             }
 
-            if ($bestTarget !== null) {
-                $intelAge = time() - ($bestTarget['scanned_at'] ?? 0);
-                if ($intelAge > 1800 && !$dryRun) {
-                    $this->dispatcher->sendSpy($planet, $user, $bestTarget, $probesPerSpy);
-                    $result['spied'] = true;
-                    $result['spy_target'] = "{$bestTarget['galaxy']}:{$bestTarget['system']}:{$bestTarget['planet']} (refresh)";
+            if ($attackFleet !== null) {
+                $coords = "{$attackTarget['galaxy']}:{$attackTarget['system']}:{$attackTarget['planet']}";
+                if (!$dryRun) {
+                    try {
+                        $fleetId = $this->dispatcher->sendAttack($planet, $user, $attackTarget, $attackFleet);
+                        if ($fleetId) {
+                            $result['attacked'] = true;
+                            $result['attack_target'] = $coords;
+                            $this->chat->sendAttackWinMessage($user, (int) ($attackTarget['user_id'] ?? 0), $personality);
+                        }
+                    } catch (\Throwable $e) {
+                        \Illuminate\Support\Facades\Log::error("BotTick: attack dispatch crashed for {$bot->name}: " . $e->getMessage());
+                    }
                 } else {
-                    $attackFleet = $this->brain->planAttack($planet, $user, $bestTarget);
-
-                    if ($attackFleet === null && $dryRun) {
-                        $availableShips = array_filter([
-                            204 => (int) ($planet['ship_light_fighter'] ?? 0),
-                            205 => (int) ($planet['ship_heavy_fighter'] ?? 0),
-                            206 => (int) ($planet['ship_cruiser'] ?? 0),
-                            207 => (int) ($planet['ship_battleship'] ?? 0),
-                        ], fn ($c) => $c > 0);
-
-                        $fleet = [];
-                        if (isset($availableShips[204]) && $availableShips[204] > 0) $fleet[204] = min($availableShips[204], 50);
-                        if (isset($planet['ship_small_cargo_ship']) && $planet['ship_small_cargo_ship'] > 0) {
-                            $fleet[202] = min((int)$planet['ship_small_cargo_ship'], (int)ceil($bestTarget['resources'] / 5000), 20);
-                        }
-
-                        $defenderPlanet = $bestTarget['planet_data'] ?? [];
-                        $defenderUser = ['research_weapons_technology' => 0, 'research_shielding_technology' => 0, 'research_armour_technology' => 0];
-
-                        try {
-                            $simResult = $this->simulator->simulate($fleet, $defenderPlanet, $user, $defenderUser);
-                            $lossRate = array_sum($fleet) > 0 ? $simResult['attacker_losses'] / array_sum($fleet) : 1;
-                            $this->line("  [{$bot->id}] SIM: winner={$simResult['winner']} losses={$simResult['attacker_losses']} rate=" . round($lossRate * 100) . "% fleet=" . json_encode($fleet));
-                        } catch (\Throwable $e) {
-                            $this->line("  [{$bot->id}] SIM ERROR: " . $e->getMessage());
-                        }
+                    $result['attacked'] = true;
+                    $result['attack_target'] = $coords;
+                }
+            } elseif ($staleTarget !== null && $probesLeft >= $probesPerSpy) {
+                // Nothing fresh we can beat — refresh the richest stale entry so next tick can decide.
+                $coords = "{$staleTarget['galaxy']}:{$staleTarget['system']}:{$staleTarget['planet']}";
+                if (!$dryRun) {
+                    if ($this->dispatcher->sendSpy($planet, $user, $staleTarget, $probesPerSpy)) {
+                        $result['spied'] = true;
+                        $result['spy_target'] = "{$coords} (refresh)";
                     }
-
-                    if ($attackFleet !== null) {
-                        try {
-                        $defenderPlanet = $useIntel
-                            ? $this->buildDefenderFromIntel($bestTarget)
-                            : ($bestTarget['planet_data'] ?? []);
-
-                        $defenderUser = [
-                            'research_weapons_technology' => (int) ($defenderPlanet['research_weapons_technology'] ?? 0),
-                            'research_shielding_technology' => (int) ($defenderPlanet['research_shielding_technology'] ?? 0),
-                            'research_armour_technology' => (int) ($defenderPlanet['research_armour_technology'] ?? 0),
-                        ];
-
-                        $simResult = $this->simulator->simulate($attackFleet, $defenderPlanet, $user, $defenderUser);
-
-                        $attackerInitial = array_sum($attackFleet);
-                        $lossRate = $attackerInitial > 0 ? $simResult['attacker_losses'] / $attackerInitial : 1;
-
-                        if ($simResult['winner'] === 'attacker' && $lossRate < 0.8) {
-                            if (!$dryRun) {
-                                $fleetId = $this->dispatcher->sendAttack($planet, $user, $bestTarget, $attackFleet);
-                                if ($fleetId) {
-                                    $result['attacked'] = true;
-                                    $result['attack_target'] = "{$bestTarget['galaxy']}:{$bestTarget['system']}:{$bestTarget['planet']}";
-
-                                    $this->chat->sendAttackWinMessage($user, (int) ($bestTarget['user_id'] ?? 0), $personality);
-                                }
-                            } else {
-                                $result['attacked'] = true;
-                                $result['attack_target'] = "{$bestTarget['galaxy']}:{$bestTarget['system']}:{$bestTarget['planet']}";
-                            }
-                        }
-                        } catch (\Throwable $e) {
-                            \Illuminate\Support\Facades\Log::error("BotTick: attack sim crashed for {$bot->name}: " . $e->getMessage());
-                        }
-                    }
+                } else {
+                    $result['spied'] = true;
+                    $result['spy_target'] = "{$coords} (refresh)";
                 }
             }
         }

@@ -139,24 +139,29 @@ class BattleSimulator
 
         $report = $battle->getReport();
 
-        // Use report for accurate results
-        $attackerInitial = array_sum($attackerShips);
-        $defenderInitial = array_sum($defenderShips) + array_sum($defenderDefenses);
-
-        $attackerLost = $report->getTotalAttackersLostUnits();
-        $defenderLost = $report->getTotalDefendersLostUnits();
-
-        $attackerRemaining = max(0, $attackerInitial - $attackerLost);
-        $defenderRemaining = max(0, $defenderInitial - $defenderLost);
-
-        // Determine winner from remaining units
-        if ($attackerRemaining > 0 && $defenderRemaining == 0) {
+        // Winner straight from the engine (attackerHasWin / isAdraw — same calls CombatLogService
+        // uses for the real battle). Until 6 Sep this subtracted getTotalAttackersLostUnits() —
+        // which is the RESOURCE VALUE of the lost ships, not a count — from the ship count, so any
+        // fight with real losses read as "draw" and only zero-loss raids were ever approved.
+        if ($report->attackerHasWin()) {
             $winner = 'attacker';
-        } elseif ($attackerRemaining == 0 && $defenderRemaining > 0) {
-            $winner = 'defender';
-        } else {
+        } elseif ($report->isAdraw()) {
             $winner = 'draw';
+        } else {
+            $winner = 'defender';
         }
+
+        // Unit counts before/after (defences counted before repair)
+        $attackerInitialCount = array_sum($attackerShips);
+        $defenderInitialCount = array_sum($defenderShips) + array_sum($defenderDefenses);
+
+        $attackerFinal = $this->extractFleetComposition($report->getAfterBattleAttackers());
+        $defenderFinal_all = $this->extractFleetComposition($report->getAfterBattleDefenders());
+
+        $attackerRemaining = array_sum($attackerFinal);
+        $defenderRemaining = array_sum($defenderFinal_all);
+        $attackerLost = max(0, $attackerInitialCount - $attackerRemaining);
+        $defenderLost = max(0, $defenderInitialCount - $defenderRemaining);
 
         // Loot from report
         $steal = $report->getSteal();
@@ -168,12 +173,10 @@ class BattleSimulator
         $debris = $report->getDebris();
         $moonProb = $report->getMoonProb();
 
-        // Per-ship-type breakdown: extract initial counts + surviving counts from OPBE report
+        // Per-ship-type breakdown: initial counts + surviving counts (extracted above)
         $attackerInitial = $attackerShips;
-        $attackerFinal = $this->extractFleetComposition($report->getAfterBattleAttackers());
 
         // Defender has both ships and defenses — separate them
-        $defenderFinal_all = $this->extractFleetComposition($report->getAfterBattleDefenders());
         $defenderShipsFinal = [];
         $defenderDefensesFinal = [];
 

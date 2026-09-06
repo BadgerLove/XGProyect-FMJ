@@ -143,11 +143,48 @@ class BotBrain
         118 => 4,  // Hyperspace Drive
     ];
 
+    /**
+     * When true, canAfford() says yes to everything — used by wantedBuildingCost() to ask
+     * "what would you build if money were no object?" without duplicating the selection logic.
+     */
+    private bool $ignoreAffordability = false;
+
     public function __construct(
         private readonly ProductionService $productionService,
         private readonly ThreatAnalyzer $threatAnalyzer,
         private readonly BattleSimulator $simulator,
     ) {
+    }
+
+    /**
+     * Cost of the building the brain WANTS next on this planet, ignoring what it can afford
+     * right now. Null when there is genuinely nothing to build (or research is the better buy).
+     *
+     * BotTick uses this as a spending reserve for the shipyard: while the planet is saving up
+     * for this building, combat ships/defence may only spend what is left above the reserve.
+     * Before this (6 Sep) the hangar took every spare crystal each tick (cruisers 7K, heavy
+     * fighters 4K) so 250-460K-crystal buildings were never reached — 140-190 idle planets.
+     *
+     * @param  array<string, mixed>  $planet
+     * @param  array<string, mixed>  $user
+     * @return array{building_id: int, metal: float, crystal: float, deuterium: float}|null
+     */
+    public function wantedBuildingCost(array $planet, array $user): ?array
+    {
+        $this->ignoreAffordability = true;
+        try {
+            $buildingId = $this->nextBuilding($planet, $user);
+        } finally {
+            $this->ignoreAffordability = false;
+        }
+
+        if ($buildingId === null) {
+            return null;
+        }
+
+        $cost = $this->getBuildingCost($buildingId, $this->getBuildingLevel($buildingId, $planet));
+
+        return ['building_id' => $buildingId] + $cost;
     }
 
     /**
@@ -733,7 +770,15 @@ class BotBrain
     /** Below this many probes (owned + queued) a raider/balanced planet restocks before anything else. */
     private const PROBE_FLOOR = 15;  // was 5; a tick now spends up to 9 probes (3 targets × 3 probes)
 
-    public function nextShip(array $planet, array $user): ?array
+    /**
+     * @param  array<string, mixed>  $planet
+     * @param  array<string, mixed>  $user
+     * @param  array{metal?: float, crystal?: float, deuterium?: float}  $reserve  Resources to leave
+     *         untouched for the building the planet is saving for (see wantedBuildingCost()).
+     *         Solar Satellites (energy) and the probe floor ignore it — both are cheap and
+     *         the economy / raiding stops without them.
+     */
+    public function nextShip(array $planet, array $user, array $reserve = []): ?array
     {
         $hangarLevel = (int) ($planet['building_hangar'] ?? 0);
 
@@ -830,9 +875,10 @@ class BotBrain
                 continue;
             }
 
-            $metal = (float) ($planet['planet_metal'] ?? 0);
-            $crystal = (float) ($planet['planet_crystal'] ?? 0);
-            $deuterium = (float) ($planet['planet_deuterium'] ?? 0);
+            // Spendable = on hand minus the building reserve (never negative)
+            $metal = max(0.0, (float) ($planet['planet_metal'] ?? 0) - (float) ($reserve['metal'] ?? 0));
+            $crystal = max(0.0, (float) ($planet['planet_crystal'] ?? 0) - (float) ($reserve['crystal'] ?? 0));
+            $deuterium = max(0.0, (float) ($planet['planet_deuterium'] ?? 0) - (float) ($reserve['deuterium'] ?? 0));
 
             if ($metal >= $cost['metal'] && $crystal >= $cost['crystal'] && $deuterium >= $cost['deuterium']) {
                 // Calculate how many we can afford
@@ -1049,6 +1095,8 @@ class BotBrain
             return null;
         }
 
+        $this->lastAttackDebug = [];
+
         // Calculate available combat ships
         $availableShips = $this->getAvailableCombatShips($botPlanet);
 
@@ -1056,60 +1104,6 @@ class BotBrain
             return null;
         }
 
-        // Build the attack fleet
-        $fleet = [];
-
-        // Send light fighters first (cheapest combat ship)
-        if (isset($availableShips[204]) && $availableShips[204] > 0) {
-            $fleet[204] = min($availableShips[204], 50);
-        }
-
-        // Calculate required loot capacity (we want to steal as much as possible, up to 100% just in case)
-        $lootCapacityNeeded = (int) ($target['resources'] ?? 0);
-        
-        // Try to add Large Cargos first (25,000 capacity each)
-        if ($lootCapacityNeeded > 0 && isset($availableShips[203]) && $availableShips[203] > 0) {
-            $largeCargosNeeded = (int) ceil($lootCapacityNeeded / 25000);
-            $largeCargosToSend = min($availableShips[203], $largeCargosNeeded);
-            
-            if ($largeCargosToSend > 0) {
-                $fleet[203] = $largeCargosToSend;
-                $lootCapacityNeeded -= ($largeCargosToSend * 25000);
-            }
-        }
-
-        // Fill remaining need with Small Cargos (5,000 capacity each)
-        if ($lootCapacityNeeded > 0 && isset($availableShips[202]) && $availableShips[202] > 0) {
-            $smallCargosNeeded = (int) ceil($lootCapacityNeeded / 5000);
-            $smallCargosToSend = min($availableShips[202], $smallCargosNeeded);
-            
-            if ($smallCargosToSend > 0) {
-                $fleet[202] = $smallCargosToSend;
-            }
-        }
-
-        // If we have heavy fighters, add some
-        if (isset($availableShips[205]) && $availableShips[205] > 0) {
-            $fleet[205] = min($availableShips[205], 10);
-        }
-
-        // Add cruisers if available
-        if (isset($availableShips[206]) && $availableShips[206] > 0) {
-            $fleet[206] = min($availableShips[206], 5);
-        }
-
-        if (empty($fleet)) {
-            return null;
-        }
-
-        // Check fuel affordability before simulation
-        $fuel = $this->estimateFuel($fleet, $botPlanet, $botUser, $target);
-
-        if ($fuel > 0 && (float) ($botPlanet['planet_deuterium'] ?? 0) < $fuel * 2) {
-            return null; // Not enough fuel (keep 2x reserve)
-        }
-
-        // Use the REAL battle simulator instead of rough power check
         $defenderPlanet = $target['planet_data'] ?? [];
 
         if (empty($defenderPlanet)) {
@@ -1121,16 +1115,6 @@ class BotBrain
             'research_shielding_technology' => (int) ($defenderPlanet['research_shielding_technology'] ?? 0),
             'research_armour_technology' => (int) ($defenderPlanet['research_armour_technology'] ?? 0),
         ];
-
-        try {
-            $simResult = $this->simulator->simulate($fleet, $defenderPlanet, $botUser, $defenderUser);
-        } catch (\Throwable $e) {
-            return null;
-        }
-
-        // Only attack if we win and losses are acceptable
-        $attackerInitial = array_sum($fleet);
-        $lossRate = $attackerInitial > 0 ? $simResult['attacker_losses'] / $attackerInitial : 1;
 
         // Personality-based loss tolerance
         $maxLossRate = match ($personality) {
@@ -1145,11 +1129,155 @@ class BotBrain
             $maxLossRate = min($maxLossRate + 0.2, 0.95); // Up to 95% losses when desperate
         }
 
-        if ($simResult['winner'] !== 'attacker' || $lossRate > $maxLossRate) {
-            return null;
+        // Cargo: the game hands over up to half of what is on the planet, capped by hold space.
+        $cargo = $this->pickCargo($availableShips, (int) ceil(((int) ($target['resources'] ?? 0)) / 2));
+        $defenderPower = $this->defenderPower($defenderPlanet);
+
+        // Size the raid to the target. Until 6 Sep the fleet was a fixed 50 LF / 10 HF / 5 CR
+        // (~6K power) while neighbours average 216 LF / 47 HF / 48 CR (~40K) — every honest
+        // simulation lost and attacks fell to 0/tick. Now try growing shares of the combat
+        // fleet and send the smallest one the battle engine says wins within the loss limit.
+        $lastFleet = null;
+
+        foreach (self::ATTACK_TIERS as $share) {
+            $fleet = $cargo;
+
+            foreach (self::ATTACK_SHIP_ORDER as $shipId) {
+                $count = (int) floor(($availableShips[$shipId] ?? 0) * $share);
+                if ($count > 0) {
+                    $fleet[$shipId] = $count;
+                }
+            }
+
+            if (count($fleet) === count($cargo) || $fleet === $lastFleet) {
+                continue; // no combat ships at this share, or same fleet as the previous tier
+            }
+            $lastFleet = $fleet;
+
+            // Cheap pre-check: don't run the battle engine for hopeless fights
+            $ownPower = $this->calculateFleetStrength($fleet);
+            if ($ownPower < $defenderPower * 0.5) {
+                $this->lastAttackDebug = ['tier' => $share, 'skipped' => 'power', 'own' => $ownPower, 'def' => $defenderPower];
+                continue;
+            }
+
+            // Fuel (keep a 2x reserve). Bigger tiers only cost more, so stop here.
+            $fuel = $this->estimateFuel($fleet, $botPlanet, $botUser, $target);
+            if ($fuel > 0 && (float) ($botPlanet['planet_deuterium'] ?? 0) < $fuel * 2) {
+                $this->lastAttackDebug = ['tier' => $share, 'skipped' => 'fuel', 'fuel' => $fuel];
+                break;
+            }
+
+            try {
+                $simResult = $this->simulator->simulate($fleet, $defenderPlanet, $botUser, $defenderUser);
+            } catch (\Throwable $e) {
+                return null;
+            }
+
+            $attackerInitial = array_sum($fleet);
+            $lossRate = $attackerInitial > 0 ? $simResult['attacker_losses'] / $attackerInitial : 1;
+
+            // Profitability: the loot must at least pay for the ships we expect to lose
+            // (a bigger tier usually loses fewer ships, so keep climbing if this one doesn't pay).
+            // The engine's own getSteal() is always 0 here — the simulator never hands it the
+            // planet's resources — so estimate: half of what the target holds, capped by the hold
+            // space of the ships that survive the fight.
+            $lostValue = 0;
+            $holdSpace = 0;
+            foreach ($simResult['attacker_ships_detail'] ?? [] as $shipId => $detail) {
+                $initial = (int) ($detail['initial'] ?? 0);
+                $final = (int) ($detail['final'] ?? 0);
+                $lost = max(0, $initial - $final);
+                $cost = $this->getShipCost((int) $shipId);
+                if ($lost > 0 && $cost !== null) {
+                    $lostValue += $lost * ($cost['metal'] + $cost['crystal'] + $cost['deuterium']);
+                }
+                $holdSpace += max(0, $final) * (self::CARGO_CAPACITY[(int) $shipId] ?? 0);
+            }
+            $lootValue = min($holdSpace, intdiv((int) ($target['resources'] ?? 0), 2));
+
+            $this->lastAttackDebug = [
+                'tier' => $share, 'winner' => $simResult['winner'], 'loss_rate' => round($lossRate, 2),
+                'loot' => $lootValue, 'lost' => $lostValue, 'own' => $ownPower, 'def' => $defenderPower,
+            ];
+
+            if ($simResult['winner'] === 'attacker' && $lossRate <= $maxLossRate && $lootValue >= $lostValue) {
+                return $fleet;
+            }
+        }
+
+        return null;
+    }
+
+    /** Attack fleet sizes to try, as a share of the combat ships on the origin planet. */
+    private const ATTACK_TIERS = [0.34, 0.67, 1.0];
+
+    /** Combat ships that go on raids (never cargo-only ships, probes, sats, colony ships, recyclers). */
+    private const ATTACK_SHIP_ORDER = [204, 205, 206, 207, 211, 213, 215];
+
+    /** Hold space per ship (game values) for the loot estimate in planAttack(). */
+    private const CARGO_CAPACITY = [
+        202 => 5000, 203 => 25000, 204 => 50, 205 => 100, 206 => 800, 207 => 1500,
+        211 => 500, 213 => 2000, 214 => 1000000, 215 => 10000,
+    ];
+
+    /** What the last planAttack() decided, for dry-run output. */
+    public array $lastAttackDebug = [];
+
+    /**
+     * Cargo ships for a raid: Large Cargos first (25K each), then Small Cargos (5K each).
+     *
+     * @param  array<int, int>  $available
+     * @return array<int, int>
+     */
+    private function pickCargo(array $available, int $capacityNeeded): array
+    {
+        $fleet = [];
+
+        if ($capacityNeeded <= 0) {
+            return $fleet;
+        }
+
+        $large = min((int) ($available[203] ?? 0), (int) ceil($capacityNeeded / 25000));
+        if ($large > 0) {
+            $fleet[203] = $large;
+            $capacityNeeded -= $large * 25000;
+        }
+
+        if ($capacityNeeded > 0) {
+            $small = min((int) ($available[202] ?? 0), (int) ceil($capacityNeeded / 5000));
+            if ($small > 0) {
+                $fleet[202] = $small;
+            }
         }
 
         return $fleet;
+    }
+
+    /**
+     * Rough combat power of a defender planet array (ships + defences), same scale as
+     * calculateFleetStrength(). Used only to skip hopeless simulations.
+     *
+     * @param  array<string, mixed>  $planet
+     */
+    private function defenderPower(array $planet): int
+    {
+        $ships = [];
+        foreach ([202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215] as $id) {
+            $ships[$id] = (int) ($planet[$this->getShipColumn($id)] ?? 0);
+        }
+        $power = $this->calculateFleetStrength($ships);
+
+        $defences = [
+            'defense_rocket_launcher' => 80, 'defense_light_laser' => 100, 'defense_heavy_laser' => 250,
+            'defense_gauss_cannon' => 1100, 'defense_ion_cannon' => 500, 'defense_plasma_turret' => 3000,
+            'defense_small_shield_dome' => 2000, 'defense_large_shield_dome' => 10000,
+        ];
+        foreach ($defences as $column => $unitPower) {
+            $power += (int) ($planet[$column] ?? 0) * $unitPower;
+        }
+
+        return $power;
     }
 
     /**
@@ -1303,6 +1431,10 @@ class BotBrain
      */
     private function canAfford(int $buildingId, int $currentLevel, array $planet): bool
     {
+        if ($this->ignoreAffordability) {
+            return true; // wantedBuildingCost() — see there
+        }
+
         $cost = $this->getBuildingCost($buildingId, $currentLevel);
 
         $metal = (float) ($planet['planet_metal'] ?? 0);
