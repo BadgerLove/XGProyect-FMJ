@@ -1364,6 +1364,16 @@ class BotTick extends Command
             $planet[$column] = ($intel['defense_data'][$id] ?? 0);
         }
 
+        // Veto against stale fleet intel (6 Sep 09:30 results): raids of 4-26 ships were sent at
+        // planets the report showed as empty and met 400-1,100 ships — the target's fleet was away
+        // when probed and home when the raid landed. Take the LARGER of the report and the live
+        // ships/defences per unit type, so the simulator can be surprised upwards never downwards.
+        // (Dale's 5 Sep proposal. Resources for the loot estimate still come from the report.)
+        $live = $this->liveDefender((int) ($intel['galaxy'] ?? 0), (int) ($intel['system'] ?? 0), (int) ($intel['planet'] ?? 0));
+        foreach (array_merge($shipMap, $defenseMap) as $column) {
+            $planet[$column] = max((int) $planet[$column], (int) ($live[$column] ?? 0));
+        }
+
         // Defender tech. Spy reports don't carry it at 3 probes and the simulator was scoring
         // every defender at weapons/shield/armour 0 while bots average 11 / 9.5 / 11.7 — first
         // live tick of fix I (6 Sep): 41 wins but 11 total wipe-outs and 6 draws the sim had
@@ -1391,6 +1401,35 @@ class BotTick extends Command
 
     /** Defender research rows looked up this tick: user id => research_* columns. */
     private array $defenderTechCache = [];
+
+    /** Live ships + defences rows looked up this tick: "g:s:p" => columns. */
+    private array $liveDefenderCache = [];
+
+    /**
+     * Current ships + defences on a planet (empty array if the planet doesn't exist).
+     *
+     * @return array<string, mixed>
+     */
+    private function liveDefender(int $galaxy, int $system, int $planet): array
+    {
+        $key = "{$galaxy}:{$system}:{$planet}";
+
+        if (!array_key_exists($key, $this->liveDefenderCache)) {
+            $prefix = DB::getTablePrefix();
+            $row = DB::selectOne(
+                "SELECT s.*, d.*
+                FROM `{$prefix}planets` AS p
+                INNER JOIN `{$prefix}ships` AS s ON s.`ship_planet_id` = p.`planet_id`
+                INNER JOIN `{$prefix}defenses` AS d ON d.`defense_planet_id` = p.`planet_id`
+                WHERE p.`planet_galaxy` = ? AND p.`planet_system` = ? AND p.`planet_planet` = ? AND p.`planet_type` = 1
+                LIMIT 1",
+                [$galaxy, $system, $planet]
+            );
+            $this->liveDefenderCache[$key] = $row ? (array) $row : [];
+        }
+
+        return $this->liveDefenderCache[$key];
+    }
 
     private function getShipName(int $shipId): string
     {
