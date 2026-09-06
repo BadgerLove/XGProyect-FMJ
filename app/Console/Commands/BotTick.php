@@ -1364,8 +1364,33 @@ class BotTick extends Command
             $planet[$column] = ($intel['defense_data'][$id] ?? 0);
         }
 
+        // Defender tech. Spy reports don't carry it at 3 probes and the simulator was scoring
+        // every defender at weapons/shield/armour 0 while bots average 11 / 9.5 / 11.7 — first
+        // live tick of fix I (6 Sep): 41 wins but 11 total wipe-outs and 6 draws the sim had
+        // approved. Read the real research row instead (one query per defender per tick).
+        $targetUserId = (int) ($intel['user_id'] ?? 0);
+        if ($targetUserId > 0) {
+            if (!array_key_exists($targetUserId, $this->defenderTechCache)) {
+                $prefix = DB::getTablePrefix();
+                $row = DB::selectOne(
+                    "SELECT research_weapons_technology, research_shielding_technology, research_armour_technology
+                    FROM `{$prefix}research` WHERE `research_user_id` = ?",
+                    [$targetUserId]
+                );
+                $this->defenderTechCache[$targetUserId] = $row ? [
+                    'research_weapons_technology' => (int) $row->research_weapons_technology,
+                    'research_shielding_technology' => (int) $row->research_shielding_technology,
+                    'research_armour_technology' => (int) $row->research_armour_technology,
+                ] : [];
+            }
+            $planet += $this->defenderTechCache[$targetUserId];
+        }
+
         return $planet;
     }
+
+    /** Defender research rows looked up this tick: user id => research_* columns. */
+    private array $defenderTechCache = [];
 
     private function getShipName(int $shipId): string
     {

@@ -1201,7 +1201,9 @@ class BotBrain
                 'loot' => $lootValue, 'lost' => $lostValue, 'own' => $ownPower, 'def' => $defenderPower,
             ];
 
-            if ($simResult['winner'] === 'attacker' && $lossRate <= $maxLossRate && $lootValue >= $lostValue) {
+            // Loot must beat the losses with a margin — intel is minutes to hours old and the
+            // target's fleet may have grown by the time we arrive.
+            if ($simResult['winner'] === 'attacker' && $lossRate <= $maxLossRate && $lootValue >= $lostValue * self::LOOT_MARGIN) {
                 return $fleet;
             }
         }
@@ -1214,6 +1216,9 @@ class BotBrain
 
     /** Combat ships that go on raids (never cargo-only ships, probes, sats, colony ships, recyclers). */
     private const ATTACK_SHIP_ORDER = [204, 205, 206, 207, 211, 213, 215];
+
+    /** Estimated loot must be at least this many times the value of the ships the sim expects to lose. */
+    private const LOOT_MARGIN = 1.25;
 
     /** Hold space per ship (game values) for the loot estimate in planAttack(). */
     private const CARGO_CAPACITY = [
