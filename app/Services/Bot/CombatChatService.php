@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Bot;
 
 use App\Models\User;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Combat chat messages — makes bots feel alive by sending personality-driven
@@ -12,6 +13,16 @@ use App\Models\User;
  */
 class CombatChatService
 {
+    /**
+     * Total bot chat messages a HUMAN player may receive per 24 h, from all bots together.
+     * One bot farmed a player six times in a night on 7 Sep and sent a taunt with every raid.
+     * Bot-to-bot chatter is unlimited (nobody reads it).
+     */
+    private const HUMAN_MESSAGES_PER_DAY = 3;
+
+    /** user id => true if human, cached for the tick. */
+    private array $humanCache = [];
+
     /**
      * Message templates by personality and event type.
      * Each personality has its own voice.
@@ -127,6 +138,10 @@ class CombatChatService
     private function send(int $to, int $sender, string $senderName, string $message): void
     {
         try {
+            if ($this->isHuman($to) && $this->botMessagesLast24h($to) >= self::HUMAN_MESSAGES_PER_DAY) {
+                return;
+            }
+
             \Xgp\App\Libraries\Functions::sendMessage(
                 to: $to,
                 sender: $sender,
@@ -141,5 +156,28 @@ class CombatChatService
             // Silently fail — chat messages are nice-to-have, not critical
             \Illuminate\Support\Facades\Log::debug("CombatChat: failed to send message: " . $e->getMessage());
         }
+    }
+
+    private function isHuman(int $userId): bool
+    {
+        if (!array_key_exists($userId, $this->humanCache)) {
+            $this->humanCache[$userId] = DB::table('users')
+                ->where('id', $userId)
+                ->whereNull('bot_profile')
+                ->exists();
+        }
+
+        return $this->humanCache[$userId];
+    }
+
+    /** Messages this player received from any bot in the last 24 h (taunts carry the bot as sender). */
+    private function botMessagesLast24h(int $userId): int
+    {
+        return (int) DB::table('messages')
+            ->join('users', 'users.id', '=', 'messages.message_sender')
+            ->whereNotNull('users.bot_profile')
+            ->where('messages.message_receiver', $userId)
+            ->where('messages.message_time', '>', time() - 86400)
+            ->count();
     }
 }

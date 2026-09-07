@@ -764,11 +764,14 @@ class BotBrain
         502 => 3,    // Small Shield Dome
         212 => 120,  // Solar Satellite — ~32 energy each at 50°C; a 1,200 deficit needs ~40
         208 => 1,    // Colony Ship — only ever need 1
-        209 => 3,    // Recycler
+        209 => 20,   // Recycler — was 3; a 200K field needs 10 (7 Sep)
     ];
 
     /** Below this many probes (owned + queued) a raider/balanced planet restocks before anything else. */
     private const PROBE_FLOOR = 15;  // was 5; a tick now spends up to 9 probes (3 targets × 3 probes)
+
+    /** Below this many recyclers (owned + queued) a non-passive planet restocks before combat ships. */
+    private const RECYCLER_FLOOR = 10;
 
     /**
      * @param  array<string, mixed>  $planet
@@ -830,6 +833,34 @@ class BotBrain
 
                 if ($count >= 1) {
                     return ['ship_id' => 210, 'count' => $count, 'cost' => $cost];
+                }
+            }
+        }
+
+        // ─── Recycler floor: debris is a main income, not an afterthought (Dale, 7 Sep) ──
+        // 335 of 365 bot planets had ≥ 5K debris at their own coordinates and 333M sat in fields
+        // galaxy-wide while no bot owned a single recycler: 209 was in SHIP_CAPS but in no priority
+        // list (and the threat counter-build lists, which usually win, have none either), so the
+        // harvest phase in BotTick never fired. Exempt from the building reserve like probes —
+        // one 200K field pays for the whole floor. Needs Shipyard 4, Combustion 6, Shielding 2.
+        if ($personality !== 'passive' && $hangarLevel >= 4
+            && (int) ($user['research_combustion_drive'] ?? 0) >= 6
+            && (int) ($user['research_shielding_technology'] ?? 0) >= 2
+        ) {
+            $hangarQueue = $this->parseHangarQueue($planet['planet_b_hangar_id'] ?? '');
+            $recyclerTotal = (int) ($planet['ship_recycler'] ?? 0) + ($hangarQueue[209] ?? 0);
+
+            if ($recyclerTotal < self::RECYCLER_FLOOR) {
+                $cost = $this->getShipCost(209);
+                $affordable = min(
+                    (int) floor((float) ($planet['planet_metal'] ?? 0) / $cost['metal']),
+                    (int) floor((float) ($planet['planet_crystal'] ?? 0) / $cost['crystal']),
+                    (int) floor((float) ($planet['planet_deuterium'] ?? 0) / $cost['deuterium'])
+                );
+                $count = min(self::RECYCLER_FLOOR - $recyclerTotal, $affordable);
+
+                if ($count >= 1) {
+                    return ['ship_id' => 209, 'count' => $count, 'cost' => $cost];
                 }
             }
         }

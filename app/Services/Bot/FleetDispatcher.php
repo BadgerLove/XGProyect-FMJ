@@ -355,8 +355,12 @@ class FleetDispatcher
         $this->deductFuel($botPlanet['planet_id'], $fuel);
         $this->deductShips($botPlanet['planet_id'], $ships);
 
+        // Recycle.php collects the field once fleet_start_time (= arrival) has passed and brings
+        // the fleet home at fleet_end_time. Until 7 Sep start_time was "now", so the debris was
+        // scooped the instant the recyclers left and they were back after a single leg.
         $flightDuration = $this->calculateFlightDuration($ships, $botPlanet, $botUser, $target);
         $now = time();
+        $arrivalTime = $now + $flightDuration;
         $totalShips = array_sum($ships);
 
         return $this->insertFleet([
@@ -364,12 +368,12 @@ class FleetDispatcher
             'fleet_mission'         => 8, // RECYCLE
             'fleet_amount'          => $totalShips,
             'fleet_array'           => serialize($ships),
-            'fleet_start_time'      => $now,
+            'fleet_start_time'      => $arrivalTime,
             'fleet_start_galaxy'    => $botPlanet['planet_galaxy'],
             'fleet_start_system'    => $botPlanet['planet_system'],
             'fleet_start_planet'    => $botPlanet['planet_planet'],
             'fleet_start_type'      => 1,
-            'fleet_end_time'        => $now + $flightDuration,
+            'fleet_end_time'        => $arrivalTime + $flightDuration,
             'fleet_end_stay'        => 0,
             'fleet_end_galaxy'      => $target['galaxy'],
             'fleet_end_system'      => $target['system'],

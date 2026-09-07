@@ -163,7 +163,7 @@ class BotTick extends Command
 
         $this->info("Processing {$bots->count()} bots..." . ($dryRun ? ' (DRY RUN)' : ''));
 
-        $stats = ['processed' => 0, 'built' => 0, 'ships' => 0, 'researches' => 0, 'attacks' => 0, 'spies' => 0, 'fleet_saves' => 0, 'expeditions' => 0, 'skipped' => 0, 'errors' => 0, 'idle_planets' => 0, 'escalated' => 0, 'stuck' => 0, 'reserved' => 0];
+        $stats = ['processed' => 0, 'built' => 0, 'ships' => 0, 'researches' => 0, 'attacks' => 0, 'spies' => 0, 'fleet_saves' => 0, 'expeditions' => 0, 'harvests' => 0, 'skipped' => 0, 'errors' => 0, 'idle_planets' => 0, 'escalated' => 0, 'stuck' => 0, 'reserved' => 0];
 
         if ($this->ladder->isEnabled()) {
             $assume = (int) $this->option('ladder-assume-idle');
@@ -201,6 +201,7 @@ class BotTick extends Command
                 if ($result['expeditions'] > 0) {
                     $stats['expeditions'] += $result['expeditions'];
                 }
+                $stats['harvests'] += $result['harvests'];
 
                 $stats['idle_planets'] += $result['idle_planets'];
                 $stats['escalated'] += $result['escalated'];
@@ -260,6 +261,7 @@ class BotTick extends Command
         $this->info("  Spy missions: {$stats['spies']}");
         $this->info("  Fleet saves: {$stats['fleet_saves']}");
         $this->info("  Expeditions sent: {$stats['expeditions']}");
+        $this->info("  Harvest missions: {$stats['harvests']}");
         $this->info("  Idle planets: {$stats['idle_planets']} (ladder fired: {$stats['escalated']}, stuck: {$stats['stuck']})");
         $this->info("  Planets saving for a building (ships held back): {$stats['reserved']}");
         $this->info("  Skipped (sleeping): {$stats['skipped']}");
@@ -282,11 +284,11 @@ class BotTick extends Command
     {
         try {
             $line = sprintf(
-                "%s | %sprocessed=%d skipped=%d built=%d ships=%d research=%d attacks=%d spies=%d saves=%d expeditions=%d errors=%d | idle_planets=%d escalated=%d stuck=%d reserved=%d | %.1fs\n",
+                "%s | %sprocessed=%d skipped=%d built=%d ships=%d research=%d attacks=%d spies=%d saves=%d expeditions=%d harvests=%d errors=%d | idle_planets=%d escalated=%d stuck=%d reserved=%d | %.1fs\n",
                 date('Y-m-d H:i:s'),
                 $dryRun ? 'DRY ' : '',
                 $stats['processed'], $stats['skipped'], $stats['built'], $stats['ships'], $stats['researches'],
-                $stats['attacks'], $stats['spies'], $stats['fleet_saves'], $stats['expeditions'], $stats['errors'],
+                $stats['attacks'], $stats['spies'], $stats['fleet_saves'], $stats['expeditions'], $stats['harvests'] ?? 0, $stats['errors'],
                 $stats['idle_planets'] ?? 0, $stats['escalated'] ?? 0, $stats['stuck'] ?? 0, $stats['reserved'] ?? 0,
                 $elapsed
             );
@@ -304,7 +306,7 @@ class BotTick extends Command
     private function processBot(User $bot, bool $dryRun): array
     {
         $result = [
-            'built' => false, 'ship_built' => false, 'attacked' => false, 'spied' => false, 'fleet_saved' => false, 'expeditions' => 0,
+            'built' => false, 'ship_built' => false, 'attacked' => false, 'spied' => false, 'fleet_saved' => false, 'expeditions' => 0, 'harvests' => 0,
             'building' => null, 'ship' => null, 'research' => null,
             'attack_target' => null, 'spy_target' => null,
             'idle_planets' => 0, 'escalated' => 0, 'stuck' => 0, 'reserved' => 0,
@@ -628,28 +630,44 @@ class BotTick extends Command
                 }
             }
 
-            // Debris field harvesting
-            if (!$this->dispatcher->hasActiveFleetFromPlanet($planet['planet_galaxy'], $planet['planet_system'], $planet['planet_planet'])
-                && $this->harvester->hasRecyclers($planet)
+            // Debris field harvesting — the field on the bot's own doorstep first (every raid it
+            // suffers leaves one), then fields it knows about from its own battles, both sized from
+            // the LIVE planet debris. Only a recycle mission already out from here blocks it; until
+            // 7 Sep ANY fleet out did — and no bot owned a recycler anyway (209 was in no build list).
+            if ($this->harvester->hasRecyclers($planet)
+                && !$this->dispatcher->hasActiveFleetFromPlanet(
+                    (int) $planet['planet_galaxy'], (int) $planet['planet_system'], (int) $planet['planet_planet'],
+                    (int) ($planet['planet_type'] ?? 1), [Missions::RECYCLE]
+                )
             ) {
-                $debrisTarget = $this->harvester->findHarvestTarget($planet, $bot->id);
+                $debrisTarget = $this->harvester->findOwnDebris($planet)
+                    ?? $this->harvester->findHarvestTarget($planet, $bot->id);
 
                 if ($debrisTarget !== null) {
                     $needed = $this->harvester->calcRecyclersNeeded($debrisTarget);
                     $available = (int) ($planet['ship_recycler'] ?? 0);
                     $toSend = min($needed, $available);
+                    $where = "{$debrisTarget['galaxy']}:{$debrisTarget['system']}:{$debrisTarget['planet']}";
+                    $what = number_format($debrisTarget['debris_metal']) . 'M/' . number_format($debrisTarget['debris_crystal']) . 'C';
 
                     if ($toSend > 0) {
-                        $harvestFleet = [209 => $toSend];
-
                         if (!$dryRun) {
-                            $fleetId = $this->dispatcher->sendRecycle($planet, $user, $debrisTarget, $harvestFleet);
+                            $fleetId = $this->dispatcher->sendRecycle($planet, $user, $debrisTarget, [209 => $toSend]);
                             if ($fleetId) {
-                                $this->harvester->markHarvested($debrisTarget['combat_id'], $bot->id);
-                                $this->line("  [{$bot->id}] {$bot->name}: harvesting {$debrisTarget['debris_metal']}+{$debrisTarget['debris_crystal']} debris at {$debrisTarget['galaxy']}:{$debrisTarget['system']}:{$debrisTarget['planet']}");
+                                if ($toSend >= $needed) {
+                                    // Whole field covered — forget the log rows. A partial trip leaves them
+                                    // so the bot comes back for the rest when the recyclers are home.
+                                    $this->harvester->markHarvestedAt(
+                                        $debrisTarget['galaxy'], $debrisTarget['system'], $debrisTarget['planet'], $bot->id
+                                    );
+                                }
+                                $planet['ship_recycler'] = $available - $toSend;
+                                $result['harvests']++;
+                                $this->line("  [{$bot->id}] {$bot->name}: harvesting {$what} at {$where} ({$toSend} recyclers)");
                             }
                         } else {
-                            $this->line("  [{$bot->id}] {$bot->name}: would harvest {$debrisTarget['debris_metal']}+{$debrisTarget['debris_crystal']} debris at {$debrisTarget['galaxy']}:{$debrisTarget['system']}:{$debrisTarget['planet']}");
+                            $result['harvests']++;
+                            $this->line("  [{$bot->id}] {$bot->name}: would harvest {$what} at {$where} ({$toSend} of {$needed} recyclers)");
                         }
                     }
                 }
@@ -955,10 +973,12 @@ class BotTick extends Command
             }
         }
 
-        // --- Phase 6: Expeditions (only if the spy/attack phase found nothing to do) ---
-        if (!$result['spied'] && !$result['attacked']) {
-            $result['expeditions'] = $this->sendExpeditions($bot, $user, $planetRows, $dryRun);
-        }
+        // --- Phase 6: Expeditions — every tick, whatever Phase 5 did ---
+        // Until 7 Sep only a bot that neither spied nor attacked sent any, so raiders (most of the
+        // universe) almost never did. Dale: expeditions are a massive thing for players, so they
+        // should be for bots too. Raids keep first call — Phase 5 has already taken its ships, and
+        // sendExpeditions() re-reads what is still at home.
+        $result['expeditions'] = $this->sendExpeditions($bot, $user, $planetRows, $dryRun);
 
         return $result;
     }
@@ -991,6 +1011,7 @@ class BotTick extends Command
         $freeFleetSlots = $maxFleets - $this->dispatcher->countActiveFleets((int) $bot->id);
 
         $profile = json_decode((string) ($bot->bot_profile ?? '{}'), true);
+        $isActive = $this->isInActiveWindow($profile);
         $sent = 0;
 
         foreach ($planetRows as $planetRow) {
@@ -998,16 +1019,17 @@ class BotTick extends Command
                 break;
             }
 
-            $planet = (array) $planetRow;
+            // Phase 5 and the harvest phase have already taken ships and fuel from this planet
+            // this tick — re-read what is actually still at home. (A raid or spy flight out from
+            // here no longer blocks an expedition; the slot counts above are the limit.)
+            $planet = $this->refreshPlanetShips((array) $planetRow);
 
-            if ($this->dispatcher->hasActiveFleetFromPlanet(
-                (int) $planet['planet_galaxy'], (int) $planet['planet_system'], (int) $planet['planet_planet'],
-                (int) ($planet['planet_type'] ?? 1)
-            )) {
-                continue;
-            }
+            // Duration first: it sizes the cargo (finds scale with the stay length).
+            // Short during active hours, long overnight (fleet save).
+            $stayDuration = $this->pickExpeditionDuration($profile);
+            $hours = round($stayDuration / 3600, 1);
 
-            $expFleet = $this->buildExpeditionFleet($planet);
+            $expFleet = $this->buildExpeditionFleet($planet, $user, $stayDuration, $isActive);
             if (empty($expFleet)) {
                 continue;
             }
@@ -1015,12 +1037,8 @@ class BotTick extends Command
             // Pick a system to send expedition to — rotate around home system
             $expSystem = $this->pickExpeditionSystem((int) $planet['planet_galaxy'], (int) $planet['planet_system'], (int) $bot->id);
 
-            // Duration: short during active hours, long overnight (fleet save)
-            $stayDuration = $this->pickExpeditionDuration($profile);
-            $hours = round($stayDuration / 3600, 1);
-
             if ($dryRun) {
-                $this->line("  [{$bot->id}] {$bot->name}: would send expedition → {$planet['planet_galaxy']}:{$expSystem}:16 ({$hours}h)");
+                $this->line("  [{$bot->id}] {$bot->name}: would send expedition → {$planet['planet_galaxy']}:{$expSystem}:16 ({$hours}h) " . json_encode($expFleet));
                 $sent++;
                 $availableSlots--;
                 $freeFleetSlots--;
@@ -1037,7 +1055,7 @@ class BotTick extends Command
             );
 
             if ($fleetId) {
-                $this->line("  [{$bot->id}] {$bot->name}: expedition → {$planet['planet_galaxy']}:{$expSystem}:16 ({$hours}h)");
+                $this->line("  [{$bot->id}] {$bot->name}: expedition → {$planet['planet_galaxy']}:{$expSystem}:16 ({$hours}h) " . json_encode($expFleet));
                 $sent++;
                 $availableSlots--;
                 $freeFleetSlots--;
@@ -1449,60 +1467,119 @@ class BotTick extends Command
 
     // ─── Expedition Helpers ──────────────────────────────────
 
+    /** Share of the combat ships at home that an expedition takes: awake vs about to sleep (fleet save). */
+    private const EXPEDITION_SHARE_ACTIVE = 0.5;
+    private const EXPEDITION_SHARE_SLEEP = 0.9;
+
+    /** Don't bother below this many combat ships — pirates/aliens eat tiny fleets and finds scale with value. */
+    private const EXPEDITION_MIN_COMBAT_SHIPS = 10;
+
+    /** Game cost (metal + crystal + deuterium) per ship, for the find estimate (Expedition::resultResources). */
+    private const EXPEDITION_SHIP_VALUE = [
+        202 => 4000, 203 => 12000, 204 => 4000, 205 => 10000, 206 => 29000, 207 => 60000,
+        210 => 1000, 211 => 90000, 213 => 125000, 215 => 160000,
+    ];
+
+    /** Base hold space per ship (before Hyperspace Tech, +5 %/level). */
+    private const EXPEDITION_SHIP_HOLD = [
+        202 => 5000, 203 => 25000, 204 => 50, 205 => 100, 206 => 800, 207 => 1500,
+        211 => 500, 213 => 2000, 215 => 10000,
+    ];
+
     /**
      * Build a fleet composition for an expedition.
-     * Sends a mix of combat ships (for finding ships), cargo (for resources),
-     * and 1 probe (for depletion reports). Leaves some ships behind for defense.
      *
-     * @return array<int, int>  Ship ID => count, empty if nothing to send
+     * The engine (legacy Expedition::resultResources) finds fleetValue × 3-20 % (tier by value)
+     * × a duration multiplier and keeps only what the fleet can CARRY, and ship finds scale with
+     * the fleet's structural points — so value and hold space are what matter. Combat ships:
+     * half of what is home while awake, 90 % before the sleep window (doubles as fleet save).
+     * Cargo: enough hold space for the best-case find, Large Cargos first. Always 1 probe.
+     *
+     * @return array<int, int>  Ship ID => count, empty if nothing worth sending
      */
-    private function buildExpeditionFleet(array $planet): array
+    private function buildExpeditionFleet(array $planet, array $user, int $stayDuration, bool $isActive): array
     {
         $fleet = [];
+        $value = 0;
+        $hyper = (int) ($user['research_hyperspace_technology'] ?? 0);
+        $holdBonus = 1 + 0.05 * $hyper;
+        $combatShare = $isActive ? self::EXPEDITION_SHARE_ACTIVE : self::EXPEDITION_SHARE_SLEEP;
 
-        // Combat ships — send 50-80% of what's available (leave some for defense)
-        $combatShips = [
-            204 => (int) ($planet['ship_light_fighter'] ?? 0),
-            205 => (int) ($planet['ship_heavy_fighter'] ?? 0),
-            206 => (int) ($planet['ship_cruiser'] ?? 0),
-            207 => (int) ($planet['ship_battleship'] ?? 0),
-            213 => (int) ($planet['ship_destroyer'] ?? 0),
-            215 => (int) ($planet['ship_reaper'] ?? 0),
-        ];
-
-        $totalCombat = array_sum($combatShips);
-        if ($totalCombat > 0) {
-            // Send 50-80% of combat ships
-            $sendPct = mt_rand(50, 80) / 100;
-            foreach ($combatShips as $shipId => $count) {
-                if ($count > 0) {
-                    $toSend = max(1, (int) floor($count * $sendPct));
-                    $fleet[$shipId] = $toSend;
-                }
+        foreach ([204, 205, 206, 207, 211, 213, 215] as $shipId) {
+            $count = (int) floor(((int) ($planet[$this->shipColumn($shipId)] ?? 0)) * $combatShare);
+            if ($count > 0) {
+                $fleet[$shipId] = $count;
+                $value += $count * self::EXPEDITION_SHIP_VALUE[$shipId];
             }
         }
 
-        // Cargo ships — send some for resource finds
-        $bigCargo = (int) ($planet['ship_big_cargo_ship'] ?? 0);
-        $smallCargo = (int) ($planet['ship_small_cargo_ship'] ?? 0);
-        if ($bigCargo >= 5) {
-            $fleet[203] = max(1, (int) floor($bigCargo * 0.5));
-        } elseif ($smallCargo >= 5) {
-            $fleet[202] = max(1, (int) floor($smallCargo * 0.5));
-        }
-
-        // Always send 1 probe for depletion reports (if available)
-        $probes = (int) ($planet['ship_espionage_probe'] ?? 0);
-        if ($probes >= 1) {
-            $fleet[210] = 1;
-        }
-
-        // Need at least some ships to send an expedition
-        if (array_sum($fleet) < 1) {
+        if (array_sum($fleet) < self::EXPEDITION_MIN_COMBAT_SHIPS) {
             return [];
         }
 
+        // Best-case find: 20 % of the fleet's value × the stay multiplier (1 + (h−1)·2/7)
+        $hours = max(1, (int) round($stayDuration / 3600));
+        $multiplier = 1.0 + ($hours - 1) * (2 / 7);
+        $capacityNeeded = (int) ceil($value * 0.20 * $multiplier);
+
+        foreach ($fleet as $shipId => $count) {
+            $capacityNeeded -= (int) ($count * (self::EXPEDITION_SHIP_HOLD[$shipId] ?? 0) * $holdBonus);
+        }
+
+        // Cargo: Large Cargos first; keep some at home for raiding while awake, all out before sleep
+        $cargoShare = $isActive ? 0.7 : 1.0;
+        $bigHome = (int) floor(((int) ($planet['ship_big_cargo_ship'] ?? 0)) * $cargoShare);
+        $smallHome = (int) floor(((int) ($planet['ship_small_cargo_ship'] ?? 0)) * $cargoShare);
+        $bigHold = (int) (self::EXPEDITION_SHIP_HOLD[203] * $holdBonus);
+        $smallHold = (int) (self::EXPEDITION_SHIP_HOLD[202] * $holdBonus);
+
+        if ($capacityNeeded > 0 && $bigHome > 0) {
+            $big = min($bigHome, (int) ceil($capacityNeeded / $bigHold));
+            $fleet[203] = $big;
+            $capacityNeeded -= $big * $bigHold;
+        }
+        if ($capacityNeeded > 0 && $smallHome > 0) {
+            $fleet[202] = min($smallHome, (int) ceil($capacityNeeded / $smallHold));
+        }
+
+        // Always send 1 probe for depletion reports (if available)
+        if ((int) ($planet['ship_espionage_probe'] ?? 0) >= 1) {
+            $fleet[210] = 1;
+        }
+
         return $fleet;
+    }
+
+    /**
+     * Re-read the ships and resources of a planet after earlier phases spent them this tick.
+     *
+     * @param  array<string, mixed>  $planet
+     * @return array<string, mixed>
+     */
+    private function refreshPlanetShips(array $planet): array
+    {
+        $prefix = DB::getTablePrefix();
+        $row = DB::selectOne(
+            "SELECT p.`planet_metal`, p.`planet_crystal`, p.`planet_deuterium`, s.*
+            FROM `{$prefix}planets` AS p
+            INNER JOIN `{$prefix}ships` AS s ON s.`ship_planet_id` = p.`planet_id`
+            WHERE p.`planet_id` = ?
+            LIMIT 1",
+            [(int) $planet['planet_id']]
+        );
+
+        return $row ? array_merge($planet, (array) $row) : $planet;
+    }
+
+    private function shipColumn(int $shipId): string
+    {
+        return [
+            202 => 'ship_small_cargo_ship', 203 => 'ship_big_cargo_ship', 204 => 'ship_light_fighter',
+            205 => 'ship_heavy_fighter', 206 => 'ship_cruiser', 207 => 'ship_battleship',
+            208 => 'ship_colony_ship', 209 => 'ship_recycler', 210 => 'ship_espionage_probe',
+            211 => 'ship_bomber', 212 => 'ship_solar_satellite', 213 => 'ship_destroyer',
+            214 => 'ship_deathstar', 215 => 'ship_reaper',
+        ][$shipId];
     }
 
     /**
@@ -1519,10 +1596,9 @@ class BotTick extends Command
     }
 
     /**
-     * Pick expedition stay duration based on bot's active hours.
-     * Short (1-2h) during active hours, long (6-8h) overnight (fleet save).
+     * Is the bot inside its active window right now (bot_profile active_start/active_end, tz_offset)?
      */
-    private function pickExpeditionDuration(array $profile): int
+    private function isInActiveWindow(array $profile): bool
     {
         $activeStart = $profile['active_start'] ?? 8;
         $activeEnd = $profile['active_end'] ?? 22;
@@ -1531,15 +1607,21 @@ class BotTick extends Command
         // Current hour in bot's timezone
         $botHour = (int) gmdate('H', time() + ($tzOffset * 3600));
 
-        // Is the bot currently in its active window?
         if ($activeStart < $activeEnd) {
-            $isActive = $botHour >= $activeStart && $botHour < $activeEnd;
-        } else {
-            // Wraps midnight (e.g., active 22-6)
-            $isActive = $botHour >= $activeStart || $botHour < $activeEnd;
+            return $botHour >= $activeStart && $botHour < $activeEnd;
         }
 
-        if ($isActive) {
+        // Wraps midnight (e.g., active 22-6)
+        return $botHour >= $activeStart || $botHour < $activeEnd;
+    }
+
+    /**
+     * Pick expedition stay duration based on bot's active hours.
+     * Short (1-2h) during active hours, long (6-8h) overnight (fleet save).
+     */
+    private function pickExpeditionDuration(array $profile): int
+    {
+        if ($this->isInActiveWindow($profile)) {
             // Active hours: short expeditions (1-2 hours)
             return mt_rand(1, 2) * 3600;
         } else {
