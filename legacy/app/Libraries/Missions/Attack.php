@@ -59,6 +59,18 @@ class Attack extends Missions
         ]);
 
         if ($fleet_row['fleet_mess'] == 0 && $fleet_row['fleet_start_time'] <= time()) {
+            // Target planet no longer exists (deleted while the fleet was in flight): turn around.
+            if (empty($target_planet) || !isset($target_planet['planet_user_id'])) {
+                if ($fleet_row['fleet_group'] > 0) {
+                    $this->updateAcsFleetStatusByGroupId($fleet_row['fleet_group']);
+                    $this->deleteAcsFleetById($fleet_row['fleet_group']);
+                } else {
+                    parent::returnFleet($fleet_row['fleet_id']);
+                }
+
+                return;
+            }
+
             require LIB_PATH . 'BattleEngine' . DIRECTORY_SEPARATOR . 'Utils' . DIRECTORY_SEPARATOR . 'Includer.php';
 
             // set language for the reports

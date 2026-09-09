@@ -44,6 +44,14 @@ class Spy extends Missions
                 ],
             ]);
 
+            // Target (or origin) planet no longer exists — deleted while the probes were in flight.
+            // Nothing to report on: send them home.
+            if (empty($target_data) || empty($current_data)) {
+                parent::returnFleet($fleet_row['fleet_id']);
+
+                return;
+            }
+
             $CurrentSpyLvl = $this->officerService->getMaxEspionage((int) $current_data['research_espionage_technology'], $this->officerService->isOfficerActive((int) $current_data['premium_officier_technocrat'], time()));
             $TargetSpyLvl = $this->officerService->getMaxEspionage((int) $target_data['research_espionage_technology'], $this->officerService->isOfficerActive((int) $target_data['premium_officier_technocrat'], time()));
             $fleet = FleetsLib::getFleetShipsArray($fleet_row['fleet_array']);

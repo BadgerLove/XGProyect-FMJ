@@ -30,6 +30,22 @@ class Deploy extends Missions
 
         // do mission
         if (parent::canStartMission($fleet)) {
+            // Destination no longer exists (deleted while the fleet was in flight): fly back home.
+            $target_planet = $this->getAllPlanetDataByCoords([
+                'coords' => [
+                    'galaxy' => $fleet['fleet_end_galaxy'],
+                    'system' => $fleet['fleet_end_system'],
+                    'planet' => $fleet['fleet_end_planet'],
+                    'type' => $fleet['fleet_end_type'],
+                ],
+            ]);
+
+            if (empty($target_planet) || !isset($target_planet['planet_user_id'])) {
+                parent::returnFleet($fleet['fleet_id']);
+
+                return;
+            }
+
             // message
             $this->sendDeploymentMessage($fleet);
         } elseif (parent::canCompleteMission($fleet)) {

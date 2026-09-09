@@ -81,6 +81,8 @@ class UpdatesLibrary
             DB::statement($this->prepareSql('DELETE FROM ' . MESSAGES . " WHERE `message_time` < '" . $delBefore . "';"));
             DB::statement($this->prepareSql('DELETE FROM ' . REPORTS . " WHERE `report_time` < '" . $delBefore . "';"));
             DB::table('sessions')->where('last_activity', '<', $delPlanets)->delete();
+            // fleets still heading for a planet about to be purged must turn around first
+            MissionControlLib::recallFleetsTargetingDestroyedPlanets($delPlanets);
             DB::statement(
                 $this->prepareSql(
                     'DELETE p,b,d,s FROM `' . PLANETS . '` AS p

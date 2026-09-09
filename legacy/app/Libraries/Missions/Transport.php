@@ -30,6 +30,14 @@ class Transport extends Missions
 
         // do mission
         if (parent::canStartMission($fleet)) {
+            // Destination (or origin) no longer exists — deleted while the fleet was in flight.
+            // Bring the cargo home untouched.
+            if (empty($trading_planets)) {
+                parent::returnFleet($fleet['fleet_id']);
+
+                return;
+            }
+
             // messages
             $this->sendDeliveryMessageToOwner($fleet, $trading_planets);
             $this->sendDeliveryMessageToReceiver($fleet, $trading_planets);
@@ -164,9 +172,9 @@ class Transport extends Missions
     {
         $text = __('game/missions.mi_fleet_back_without_resources');
         $replacements = [
-            $trading_planets['target_name'],
+            $trading_planets['target_name'] ?? $fleet['planet_end_name'] ?? '',
             Fleets::targetLink($fleet, ''),
-            $trading_planets['start_name'],
+            $trading_planets['start_name'] ?? $fleet['planet_start_name'] ?? '',
             Fleets::startLink($fleet, ''),
         ];
 
@@ -185,7 +193,7 @@ class Transport extends Missions
 
         // send message
         Functions::sendMessage(
-            $trading_planets['start_id'],
+            $trading_planets['start_id'] ?? $fleet['fleet_owner'],
             0,
             $fleet['fleet_end_time'],
             5,

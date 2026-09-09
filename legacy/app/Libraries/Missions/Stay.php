@@ -40,6 +40,18 @@ class Stay extends Missions
             ],
         ]);
 
+        // Start or target planet no longer exists (deleted while the fleet was in flight).
+        if (empty($friendly_planet)) {
+            if ($fleet_row['fleet_mess'] == 0) {
+                parent::returnFleet($fleet_row['fleet_id']);
+            } elseif ($fleet_row['fleet_end_time'] <= time()) {
+                parent::restoreFleet($fleet_row, true);
+                parent::removeFleet($fleet_row['fleet_id']);
+            }
+
+            return;
+        }
+
         // SOME REQUIRED VALUES
         $start_name = $friendly_planet['start_name'];
         $start_owner_id = $friendly_planet['start_id'];

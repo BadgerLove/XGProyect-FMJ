@@ -92,6 +92,13 @@ class Missile extends Missions
                 ],
             ]);
 
+            // Target planet no longer exists (deleted while the missiles were in flight): they are spent.
+            if (empty($target_data) || empty($attacker_data)) {
+                parent::removeFleet($fleet_row['fleet_id']);
+
+                return;
+            }
+
             $message = '';
             $single = '';
             if ($fleet_row['fleet_amount'] == 1) {

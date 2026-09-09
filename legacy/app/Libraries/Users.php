@@ -71,7 +71,13 @@ class Users
         $userRow = DB::selectOne($this->prepareSql('SELECT `ally_id` FROM `' . USERS . "` WHERE `id` = '" . $userId . "';"));
         $userData = $userRow !== null ? (array) $userRow : [];
 
-        if ($userData['ally_id'] != 0) {
+        // Other players' fleets still flying to this user's planets would arrive at coordinates
+        // that no longer exist and crash the mission processor (2026-09-09): recall them first,
+        // and forget the bots' intel on this player so they stop targeting the empty slots.
+        MissionControlLib::recallFleetsTargetingUser($userId);
+        DB::table('bot_intel')->where('target_user_id', $userId)->delete();
+
+        if (($userData['ally_id'] ?? 0) != 0) {
             $allianceRow = DB::selectOne(
                 $this->prepareSql(
                     'SELECT a.`alliance_id`, a.`alliance_ranks`,
