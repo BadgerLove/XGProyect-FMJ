@@ -269,7 +269,39 @@ class BotTick extends Command
 
         $this->appendTickLog($stats, $elapsed, (bool) $dryRun);
 
+        if (!$dryRun) {
+            $this->updateStatistics();
+        }
+
         return self::SUCCESS;
+    }
+
+    /**
+     * Rebuild the player/alliance statistics here, every tick, instead of inside a page request.
+     * The game's own trigger (UpdatesLibrary::updateStatistics, every `stat_update_time` minutes)
+     * ran StatisticsLibrary::makeStats() — 1.6 s — in whichever player's page load came first;
+     * that option is now 60 so the web path only fires if the tick has been dead for an hour.
+     * Same named lock as UpdatesLibrary so the two never run at once. Never fails the tick.
+     */
+    private function updateStatistics(): void
+    {
+        if (!\Xgp\App\Libraries\MissionControlLib::acquireLock('xgp_updates')) {
+            $this->warn('  Statistics: skipped, a page request holds the updates lock');
+
+            return;
+        }
+
+        try {
+            $t = microtime(true);
+            $result = (new \Xgp\App\Libraries\StatisticsLibrary())->makeStats();
+            app(\App\Services\SettingsService::class)->write('stat_last_update', $result['stats_time']);
+            $this->info(sprintf('  Statistics rebuilt in %.1fs', microtime(true) - $t));
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error('BotTick: statistics update failed: ' . $e->getMessage());
+            $this->warn('  WARNING: statistics update failed: ' . $e->getMessage());
+        } finally {
+            \Xgp\App\Libraries\MissionControlLib::releaseLock('xgp_updates');
+        }
     }
 
     /**

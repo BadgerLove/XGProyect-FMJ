@@ -93,6 +93,16 @@ class UpdatesLibrary
 
             // Misc deletions
             DB::statement($this->prepareSql('DELETE FROM ' . MESSAGES . " WHERE `message_time` < '" . $delBefore . "';"));
+            // Bots receive ~50K fleet/spy reports a day and only ever read the newest 50 per tick;
+            // without this the table reached 327K rows / 261 MB and every page scanned it (2026-09-09)
+            DB::statement(
+                $this->prepareSql(
+                    'DELETE m FROM ' . MESSAGES . ' AS m
+                    INNER JOIN ' . USERS . " AS u ON u.id = m.message_receiver
+                    WHERE u.`bot_profile` IS NOT NULL
+                        AND m.`message_time` < '" . (time() - ONE_DAY) . "';"
+                )
+            );
             DB::statement($this->prepareSql('DELETE FROM ' . REPORTS . " WHERE `report_time` < '" . $delBefore . "';"));
             DB::table('sessions')->where('last_activity', '<', $delPlanets)->delete();
             // fleets still heading for a planet about to be purged must turn around first
