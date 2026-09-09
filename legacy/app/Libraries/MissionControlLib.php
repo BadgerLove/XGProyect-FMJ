@@ -15,14 +15,52 @@ class MissionControlLib
 {
     use PreparesLegacySql;
 
+    /**
+     * Name of the MariaDB named lock that makes fleet processing single-flight across
+     * php-cgi workers and the bot tick. Released automatically when the connection closes.
+     */
+    public const LOCK_NAME = 'xgp_fleet_processor';
+
     public function arrivingFleets(): void
     {
-        $this->processMissions($this->getArrivingFleets());
+        if (!self::acquireLock()) {
+            return; // another request / the tick is already processing fleets
+        }
+
+        try {
+            $this->processMissions($this->getArrivingFleets());
+        } finally {
+            self::releaseLock();
+        }
     }
 
     public function returningFleets(): void
     {
-        $this->processMissions($this->getReturningFleets());
+        if (!self::acquireLock()) {
+            return;
+        }
+
+        try {
+            $this->processMissions($this->getReturningFleets());
+        } finally {
+            self::releaseLock();
+        }
+    }
+
+    /**
+     * Try to take a named lock without waiting. Returns true when this connection holds it
+     * (including when it already held it — MariaDB named locks are re-entrant per connection).
+     */
+    public static function acquireLock(string $name = self::LOCK_NAME): bool
+    {
+        $row = DB::selectOne('SELECT GET_LOCK(?, 0) AS got', [$name]);
+
+        return $row !== null && (int) $row->got === 1;
+    }
+
+    public static function releaseLock(string $name = self::LOCK_NAME): void
+    {
+        DB::selectOne('SELECT RELEASE_LOCK(?) AS released', [$name]);
     }
 
     private function getArrivingFleets(): array

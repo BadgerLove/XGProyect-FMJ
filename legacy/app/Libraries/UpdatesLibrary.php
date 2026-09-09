@@ -30,15 +30,29 @@ class UpdatesLibrary
 {
     use PreparesLegacySql;
 
+    /**
+     * Named lock for the per-request housekeeping (cleanup, backup, statistics). With several
+     * php-cgi workers two page loads could otherwise run the six-hourly jobs at the same time.
+     */
+    private const LOCK_NAME = 'xgp_updates';
+
     public function __construct(private ProductionService $productionService)
     {
-        // Other stuff
-        $this->cleanUp();
-        $this->createBackup();
+        if (!MissionControlLib::acquireLock(self::LOCK_NAME)) {
+            return; // another request is doing the housekeeping right now
+        }
 
-        // Updates
-        $this->updateFleets();
-        $this->updateStatistics();
+        try {
+            // Other stuff
+            $this->cleanUp();
+            $this->createBackup();
+
+            // Updates
+            $this->updateFleets();
+            $this->updateStatistics();
+        } finally {
+            MissionControlLib::releaseLock(self::LOCK_NAME);
+        }
     }
 
     private function cleanUp(): void
