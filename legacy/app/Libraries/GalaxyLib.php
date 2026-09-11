@@ -686,11 +686,30 @@ class GalaxyLib
         if (($this->current_planet['building_phalanx'] != 0) &&
             ($this->row_data['id'] != $this->current_user['id']) &&
             ($this->row_data['planet_galaxy'] == $this->current_planet['planet_galaxy']) &&
-            ($this->current_planet['planet_type']) == PlanetTypesEnumerator::MOON) {
+            ($this->current_planet['planet_type']) == PlanetTypesEnumerator::MOON &&
+            !$this->isNoobProtected()) {
             return $this->isInRange(Formulas::phalanxRange($this->current_planet['building_phalanx']));
         }
 
         return false;
+    }
+
+    /**
+     * Noob protection covers phalanx scans the same way it covers espionage:
+     * a protected player cannot be scanned. Inactive players are never protected,
+     * mirroring the fleet dispatch check in Fleet4Controller.
+     */
+    private function isNoobProtected(): bool
+    {
+        if ($this->row_data['onlinetime'] < (time() - ONE_WEEK)) {
+            return false;
+        }
+
+        $current_user_points = (int) $this->current_user['user_statistic_total_points'];
+        $row_user_points = (int) $this->row_data['user_statistic_total_points'];
+
+        return $this->noob->isWeak($current_user_points, $row_user_points)
+            || $this->noob->isStrong($current_user_points, $row_user_points);
     }
 
     private function isInRange($range): bool

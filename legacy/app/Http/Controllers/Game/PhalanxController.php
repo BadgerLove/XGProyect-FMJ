@@ -11,6 +11,7 @@ use Xgp\App\Core\Template;
 use Xgp\App\Libraries\FleetsLib;
 use Xgp\App\Libraries\Formulas;
 use Xgp\App\Libraries\Functions;
+use Xgp\App\Libraries\NoobsProtectionLib;
 use Xgp\App\Libraries\Users;
 use Illuminate\Support\Facades\DB;
 use Xgp\App\Core\Concerns\PreparesLegacySql;
@@ -35,6 +36,31 @@ class PhalanxController extends BaseController
         $this->buildPage();
     }
 
+    /**
+     * Noob protection covers phalanx scans the same way it covers espionage:
+     * a protected player cannot be scanned. Inactive players are never protected,
+     * mirroring the fleet dispatch check in Fleet4Controller.
+     */
+    private function isNoobProtected(array $targetPlanetInfo): bool
+    {
+        if (Users::getInstance()->isInactive(['onlinetime' => (int) $targetPlanetInfo['onlinetime']])) {
+            return false;
+        }
+
+        $noob = new NoobsProtectionLib();
+
+        $points = $noob->returnPoints(
+            (int) $this->user['id'],
+            (int) $targetPlanetInfo['planet_user_id']
+        );
+
+        $userPoints = (int) ($points['user_points'] ?? 0);
+        $targetPoints = (int) ($points['target_points'] ?? 0);
+
+        return $noob->isWeak($userPoints, $targetPoints)
+            || $noob->isStrong($userPoints, $targetPoints);
+    }
+
     private function buildPage(): void
     {
         /* range */
@@ -55,6 +81,36 @@ class PhalanxController extends BaseController
 
         $TargetName = '';
 
+        /* Target planet and its owner, resolved BEFORE any deuterium is charged so
+         * that a refused scan costs nothing. */
+        $planetRow = DB::selectOne(
+            $this->prepareSql(
+                'SELECT
+                    p.`planet_name`,
+                    p.`planet_user_id`,
+                    u.`onlinetime`
+                FROM `' . PLANETS . '` AS p
+                INNER JOIN `' . USERS . "` AS u ON u.`id` = p.`planet_user_id`
+                WHERE p.`planet_galaxy` = '" . $Galaxy . "' AND
+                        p.`planet_system` = '" . $System . "' AND
+                        p.`planet_planet` = '" . $Planet . "' AND
+                        p.`planet_type` = 1"
+            )
+        );
+        $target_planet_info = $planetRow !== null ? (array) $planetRow : [];
+
+        /* no such planet - nothing to scan, so do not charge for it */
+        if ($target_planet_info === []) {
+            Functions::redirect('game.php?page=galaxy');
+        }
+
+        /* noob protection: a protected player cannot be scanned, exactly as they
+         * cannot be spied. The galaxy view already hides the link; this blocks a
+         * hand-crafted URL. */
+        if ($this->isNoobProtected($target_planet_info)) {
+            Functions::redirect('game.php?page=galaxy');
+        }
+
         /* main page */
         if ($this->planet['planet_deuterium'] >= 10000) {
             DB::statement(
@@ -64,20 +120,6 @@ class PhalanxController extends BaseController
                     WHERE `planet_id` = '" . $this->user['current_planet'] . "';"
                 )
             );
-
-            $planetRow = DB::selectOne(
-                $this->prepareSql(
-                    'SELECT
-                        `planet_name`,
-                        `planet_user_id`
-                    FROM `' . PLANETS . "`
-                    WHERE `planet_galaxy` = '" . $Galaxy . "' AND
-                            `planet_system` = '" . $System . "' AND
-                            `planet_planet` = '" . $Planet . "' AND
-                            `planet_type` = 1"
-                )
-            );
-            $target_planet_info = $planetRow !== null ? (array) $planetRow : [];
 
             $TargetID = $target_planet_info['planet_user_id'];
             $TargetName = $target_planet_info['planet_name'];
