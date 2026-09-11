@@ -445,9 +445,14 @@ class FleetsLib
         $bloc['fleet_javas'] = Functions::chronoApplet($Label, $recordReference, $Rest, false);
         $bloc['fleet_time'] = app(TimingService::class)->formatExtendedDate($Time);
 
+        // $Owner is a DISPLAY flag only: on the phalanx page it means "belongs to
+        // the scanned player", not "belongs to the viewer". Action buttons must key
+        // off real ownership or they render on other people's fleets.
+        $isMyFleet = (int) $fleetRow['fleet_owner'] === (int) ($current_user['id'] ?? 0);
+
         // Add cancel button for own outbound fleets that haven't arrived yet
         $bloc['fleet_cancel'] = '';
-        if ($Owner && $Status === 0 && $fleetRow['fleet_mess'] == 0) {
+        if ($isMyFleet && $Status === 0 && $fleetRow['fleet_mess'] == 0) {
             $bloc['fleet_cancel'] = '<a href="game.php?page=fleetcancel&fleetid=' . $fleetRow['fleet_id'] . '" '
                 . 'onclick="return confirm(\'Are you sure you want to recall this fleet?\')" '
                 . 'class="cancel_fleet" title="Recall Fleet">'
@@ -456,7 +461,7 @@ class FleetsLib
 
         // Add ACS button for own outbound ATTACK fleets that haven't arrived yet
         $bloc['fleet_acs'] = '';
-        if ($Owner && $Status === 0 && $fleetRow['fleet_mess'] == 0 && $fleetRow['fleet_mission'] == Missions::ATTACK) {
+        if ($isMyFleet && $Status === 0 && $fleetRow['fleet_mess'] == 0 && $fleetRow['fleet_mission'] == Missions::ATTACK) {
             $bloc['fleet_acs'] = '<a href="game.php?page=federationlayer&fleet=' . $fleetRow['fleet_id'] . '" '
                 . 'class="acs_fleet" title="Form ACS Attack">'
                 . '&#9876; ACS</a>';
