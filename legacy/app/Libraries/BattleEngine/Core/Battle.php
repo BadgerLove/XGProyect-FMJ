@@ -57,9 +57,31 @@ class Battle
      */
     public function startBattle($debug = false)
     {
+        // The engine echoes its trace (log_comment/log_var, Round.php); swallow it unless debugging.
+        // Every buffer opened here is closed in `finally`, so an exception mid-battle (a negative ship
+        // count, 13 Sep) can no longer leave it open and dump the trace onto the page that processed
+        // the fleet.
+        $bufferLevel = ob_get_level();
         if (!$debug) {
             ob_start();
         }
+        try {
+            return $this->runRounds();
+        } finally {
+            while (ob_get_level() > $bufferLevel) {
+                ob_end_clean();
+            }
+        }
+    }
+
+    /**
+     * Battle::runRounds()
+     * The battle proper; startBattle() owns the output buffer around it.
+     *
+     * @return bool|null
+     */
+    private function runRounds()
+    {
         $this->battleStarted = true;
         //only for initial fleets presentation
         log_var('attackers', $this->attackers);
@@ -73,9 +95,6 @@ class Battle
             if ($att_lose || $deff_lose) {
                 $this->checkWhoWon($att_lose, $deff_lose);
                 $this->report->setBattleResult($this->attackers->battleResult, $this->defenders->battleResult);
-                if (!$debug) {
-                    ob_get_clean();
-                }
                 return;
             }
             //initialize the round
@@ -90,9 +109,6 @@ class Battle
         }
         //check status after all rounds
         $this->checkWhoWon($this->attackers->isEmpty(), $this->defenders->isEmpty());
-        if (!$debug) {
-            ob_get_clean();
-        }
         return true;
     }
 

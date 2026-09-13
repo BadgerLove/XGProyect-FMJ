@@ -6,6 +6,7 @@ namespace App\Services\Bot;
 
 use App\Services\Game\Formulas\FleetsService;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Xgp\App\Core\Concerns\PreparesLegacySql;
 use Xgp\App\Core\Enumerators\MissionsEnumerator as Missions;
 use Xgp\App\Libraries\FleetsLib;
@@ -46,11 +47,11 @@ class FleetDispatcher
             return null;
         }
 
-        // Deduct fuel from planet
+        // Reserve the probes on the live row first (refused if the planet is short), then pay the fuel
+        if (!$this->deductShips($botPlanet['planet_id'], $ships)) {
+            return null;
+        }
         $this->deductFuel($botPlanet['planet_id'], $fuel);
-
-        // Deduct probes from planet
-        $this->deductShips($botPlanet['planet_id'], $ships);
 
         // Calculate flight times
         $flightDuration = $this->calculateFlightDuration($ships, $botPlanet, $botUser, $target);
@@ -120,11 +121,11 @@ class FleetDispatcher
             return null;
         }
 
-        // Deduct fuel
+        // Reserve the ships on the live row first (refused if the planet is short), then pay the fuel
+        if (!$this->deductShips($botPlanet['planet_id'], $ships)) {
+            return null;
+        }
         $this->deductFuel($botPlanet['planet_id'], $fuel);
-
-        // Deduct ships
-        $this->deductShips($botPlanet['planet_id'], $ships);
 
         // Calculate flight times
         $flightDuration = $this->calculateFlightDuration($ships, $botPlanet, $botUser, $target);
@@ -196,9 +197,11 @@ class FleetDispatcher
             return null;
         }
 
-        // Deduct fuel and ships
+        // Reserve the ships on the live row first (refused if the planet is short), then pay the fuel
+        if (!$this->deductShips($botPlanet['planet_id'], $ships)) {
+            return null;
+        }
         $this->deductFuel($botPlanet['planet_id'], $fuel);
-        $this->deductShips($botPlanet['planet_id'], $ships);
 
         // Also carry resources on the fleet (fleet save includes resources)
         $metal = (int) ($botPlanet['planet_metal'] ?? 0);
@@ -275,8 +278,10 @@ class FleetDispatcher
             return null;
         }
 
+        if (!$this->deductShips($botPlanet['planet_id'], $ships)) {
+            return null;
+        }
         $this->deductFuel($botPlanet['planet_id'], $fuel);
-        $this->deductShips($botPlanet['planet_id'], $ships);
 
         // Colony ship carries some resources to bootstrap the new planet
         $metal = min((int) ($botPlanet['planet_metal'] ?? 0), 5000);
@@ -352,8 +357,10 @@ class FleetDispatcher
             return null; // Need 50% reserve for return trip
         }
 
+        if (!$this->deductShips($botPlanet['planet_id'], $ships)) {
+            return null;
+        }
         $this->deductFuel($botPlanet['planet_id'], $fuel);
-        $this->deductShips($botPlanet['planet_id'], $ships);
 
         // Recycle.php collects the field once fleet_start_time (= arrival) has passed and brings
         // the fleet home at fleet_end_time. Until 7 Sep start_time was "now", so the debris was
@@ -442,9 +449,11 @@ class FleetDispatcher
             return null;
         }
 
-        // Deduct fuel and ships
+        // Reserve the ships on the live row first (refused if the planet is short), then pay the fuel
+        if (!$this->deductShips($botPlanet['planet_id'], $ships)) {
+            return null;
+        }
         $this->deductFuel($botPlanet['planet_id'], $fuel);
-        $this->deductShips($botPlanet['planet_id'], $ships);
 
         // Calculate flight times
         $flightDuration = $this->calculateFlightDuration($ships, $botPlanet, $botUser, $target);
@@ -547,9 +556,11 @@ class FleetDispatcher
             return null;
         }
 
-        // Deduct fuel, ships, and resources
+        // Reserve the ships on the live row first (refused if the planet is short), then fuel and cargo
+        if (!$this->deductShips($botPlanet['planet_id'], $ships)) {
+            return null;
+        }
         $this->deductFuel($botPlanet['planet_id'], $fuel);
-        $this->deductShips($botPlanet['planet_id'], $ships);
         $this->deductResources($botPlanet['planet_id'], $metal, $crystal, $deuterium);
 
         $flightDuration = $this->calculateFlightDuration($ships, $botPlanet, $botUser, $destination);
@@ -715,18 +726,50 @@ class FleetDispatcher
     }
 
     /**
-     * Deduct ships from a planet.
+     * Reserve ships on a planet for a fleet.
      *
-     * @param  array<int, int>  $ships
+     * Each column is decremented only if the live row still holds enough, all inside one transaction.
+     * Returns false — with nothing deducted — when the planet is short, and the caller must abandon the
+     * dispatch. The tick used to spend ships from a planet row it had read before a fleet save emptied
+     * the planet, which drove counts negative and made OPBE throw when that planet was next attacked
+     * (2:401:7 = -3 probes, 13 Sep). Callers reserve ships BEFORE paying fuel, so a refusal costs nothing.
+     *
+     * @param  array<int, int>  $ships  Ship ID => count
      */
-    private function deductShips(int $planetId, array $ships): void
+    private function deductShips(int $planetId, array $ships): bool
     {
-        foreach ($ships as $shipId => $count) {
-            $column = $this->getShipColumn($shipId);
+        DB::beginTransaction();
 
-            DB::table('ships')
-                ->where('ship_planet_id', $planetId)
-                ->decrement($column, $count);
+        try {
+            foreach ($ships as $shipId => $count) {
+                $count = (int) $count;
+
+                if ($count <= 0) {
+                    continue;
+                }
+
+                $column = $this->getShipColumn($shipId);
+
+                $affected = DB::table('ships')
+                    ->where('ship_planet_id', $planetId)
+                    ->where($column, '>=', $count)
+                    ->decrement($column, $count);
+
+                if ($affected !== 1) {
+                    DB::rollBack();
+                    Log::warning("FleetDispatcher: planet {$planetId} has fewer than {$count} {$column} — dispatch refused");
+
+                    return false;
+                }
+            }
+
+            DB::commit();
+
+            return true;
+        } catch (\Throwable $e) {
+            DB::rollBack();
+
+            throw $e;
         }
     }
 

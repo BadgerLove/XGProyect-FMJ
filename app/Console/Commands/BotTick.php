@@ -812,7 +812,11 @@ class BotTick extends Command
         // --- Phase 5: Scout and attack ---
         // Prefer moon as attack origin (harder for victim to trace back).
         // If no moon with ships, use first planet with combat ships.
-        $planet = $attackMoon ?? $attackPlanet ?? (array) $planetRows[0];
+        // Re-read the origin's ships and resources: $planetRows was loaded before Phase 0, and a fleet
+        // save there has since deployed everything to the moon. Spying/attacking from the stale row
+        // spent probes the planet no longer had (2:401:7 went to -3 on 13 Sep) and OPBE throws on a
+        // negative defender count.
+        $planet = $this->refreshPlanetShips($attackMoon ?? $attackPlanet ?? (array) $planetRows[0]);
         $personality = $this->brain->getPersonality($user);
 
         // Only a spy/attack already in flight from this origin blocks the phase. Expeditions,
