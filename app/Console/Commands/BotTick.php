@@ -52,6 +52,28 @@ class BotTick extends Command
     /** Ignore intel targets holding less than this much in total — not worth the fuel or the risk. */
     private const ATTACK_MIN_RESOURCES = 50_000;
 
+    /**
+     * Human-owned planets: a scan by ANY bot newer than this is reused (cloned into the bot's own intel)
+     * instead of sending another probe, and intel this old is still attacked on. Every probe lands as an
+     * "Espionage action" message in the human's inbox — 53 in one day from four bots re-probing the same
+     * six planets (13 Sep). The simulator merges live ships/defences anyway, so old intel only misjudges loot.
+     */
+    private const HUMAN_INTEL_SHARE_SECONDS = 21600;
+
+    /**
+     * After the battle engine rejects a human-owned target (can't win / not worth it) the bot leaves that
+     * planet alone — no probes, no sims — for this long. Without it the scanner put the same rich,
+     * unbeatable human planet at the top of the list every tick and the 30-min refresh sent another probe.
+     * Table bot_target_skip; bot-vs-bot targets are not affected.
+     */
+    private const UNWINNABLE_SKIP_SECONDS = 43200;
+
+    /** Probes avoided this tick by reusing another bot's scan of a human planet (tick line `shared=`). */
+    private int $sharedIntelHits = 0;
+
+    /** user id => true for human players, looked up once per tick. */
+    private array $humanIds = [];
+
     protected $signature = 'bot:tick
         {--dry-run : Show what would happen without saving}
         {--ladder-assume-idle=0 : DRY RUN ONLY — pretend every idle planet has already been idle this many ticks, to preview the ladder}';
@@ -316,11 +338,11 @@ class BotTick extends Command
     {
         try {
             $line = sprintf(
-                "%s | %sprocessed=%d skipped=%d built=%d ships=%d research=%d attacks=%d spies=%d saves=%d expeditions=%d harvests=%d errors=%d | idle_planets=%d escalated=%d stuck=%d reserved=%d | %.1fs\n",
+                "%s | %sprocessed=%d skipped=%d built=%d ships=%d research=%d attacks=%d spies=%d shared=%d saves=%d expeditions=%d harvests=%d errors=%d | idle_planets=%d escalated=%d stuck=%d reserved=%d | %.1fs\n",
                 date('Y-m-d H:i:s'),
                 $dryRun ? 'DRY ' : '',
                 $stats['processed'], $stats['skipped'], $stats['built'], $stats['ships'], $stats['researches'],
-                $stats['attacks'], $stats['spies'], $stats['fleet_saves'], $stats['expeditions'], $stats['harvests'] ?? 0, $stats['errors'],
+                $stats['attacks'], $stats['spies'], $this->sharedIntelHits, $stats['fleet_saves'], $stats['expeditions'], $stats['harvests'] ?? 0, $stats['errors'],
                 $stats['idle_planets'] ?? 0, $stats['escalated'] ?? 0, $stats['stuck'] ?? 0, $stats['reserved'] ?? 0,
                 $elapsed
             );
@@ -823,6 +845,10 @@ class BotTick extends Command
             // undefended planet -> 85 % of raids lost (5 Sep). Three probes always show fleet + defence.
             $probesPerSpy = 3;
 
+            // Planets this bot has given up on for now (human targets the simulator rejected).
+            $skips = $this->loadSkips($bot->id);
+            $borrowed = false;
+
             if ($probes >= $probesPerSpy && !empty($targets)) {
                 foreach ($targets as $spyTarget) {
                     if ($spiedCount >= $maxSpyPerTick) break;
@@ -834,6 +860,25 @@ class BotTick extends Command
                     $key = "{$spyTarget['galaxy']}:{$spyTarget['system']}:{$spyTarget['planet']}";
                     if (time() - ($latestScan[$key] ?? 0) < self::SPY_REFRESH_SECONDS) {
                         continue;
+                    }
+
+                    // Fix 1 (13 Sep): the simulator already said no to this human planet — leave it alone.
+                    if (($skips[$key] ?? 0) > time()) {
+                        continue;
+                    }
+
+                    // Fix 2 (13 Sep): human planet another bot looked at recently — reuse that scan, no probe.
+                    if ($this->isHumanPlayer((int) ($spyTarget['user_id'] ?? 0))) {
+                        $shared = $this->borrowHumanIntel($bot->id, $spyTarget['galaxy'], $spyTarget['system'], $spyTarget['planet'], (int) ($latestScan[$key] ?? 0), $dryRun);
+                        if ($shared > 0) {
+                            $latestScan[$key] = $shared;
+                            $borrowed = true;
+                            $this->sharedIntelHits++;
+                            if ($dryRun) {
+                                $this->line("  [{$bot->id}] SHARE: {$key} scanned " . intdiv(time() - $shared, 60) . "m ago by another bot — no probe");
+                            }
+                            continue;
+                        }
                     }
 
                     if (!$dryRun) {
@@ -851,6 +896,11 @@ class BotTick extends Command
                 }
             }
             $probesLeft = $probes - $spiedCount * $probesPerSpy;
+
+            if ($borrowed && !$dryRun) {
+                // Cloned rows must be visible to the attack phase below in the same tick.
+                $intelData = $this->intel->getAllIntel($bot->id);
+            }
 
             // ATTACK PHASE: walk the intel from richest down and raid the first target the battle
             // engine says we beat. Until 6 Sep only the single richest entry was ever tried (with a
@@ -902,6 +952,15 @@ class BotTick extends Command
 
                     if ($intelTarget['total_resources'] < self::ATTACK_MIN_RESOURCES) continue; // not worth the fuel
 
+                    // Fix 1 (13 Sep): rejected recently — no sim, no re-probe, doesn't use up a candidate slot.
+                    $skipKey = "{$intelTarget['galaxy']}:{$intelTarget['system']}:{$intelTarget['planet']}";
+                    if (($skips[$skipKey] ?? 0) > time()) {
+                        if ($dryRun) {
+                            $this->line("  [{$bot->id}] SKIP: {$skipKey} rejected earlier, until " . date('H:i', $skips[$skipKey]));
+                        }
+                        continue;
+                    }
+
                     $distance = \Xgp\App\Libraries\FleetsLib::targetDistance(
                         (int) $planet['planet_galaxy'],
                         $intelTarget['galaxy'],
@@ -947,8 +1006,10 @@ class BotTick extends Command
 
                     $coords = "{$intelTarget['galaxy']}:{$intelTarget['system']}:{$intelTarget['planet']}";
                     $intelAge = time() - (int) ($intelTarget['scanned_at'] ?? 0);
+                    $isHumanTarget = $this->isHumanPlayer($defenderId);
 
-                    if ($intelAge > self::INTEL_MAX_AGE) {
+                    // Humans run on the 6-hour shared cycle (fix 2); the sim merges live ships/defences anyway.
+                    if ($intelAge > ($isHumanTarget ? self::HUMAN_INTEL_SHARE_SECONDS : self::INTEL_MAX_AGE)) {
                         $staleTarget ??= $intelTarget;
                         if ($dryRun) {
                             $this->line("  [{$bot->id}] STALE: {$coords} res={$intelTarget['total_resources']} age=" . intdiv($intelAge, 60) . "m");
@@ -969,6 +1030,12 @@ class BotTick extends Command
                         $attackTarget = $intelTarget;
                         $attackFleet = $fleet;
                         break;
+                    }
+
+                    // Fix 1 (13 Sep): the engine said no to a human planet — don't come back for a while.
+                    if ($isHumanTarget) {
+                        $this->rememberUnwinnable($bot->id, $intelTarget, $dryRun);
+                        $skips[$coords] = time() + self::UNWINNABLE_SKIP_SECONDS;
                     }
                 }
             }
@@ -993,7 +1060,16 @@ class BotTick extends Command
             } elseif ($staleTarget !== null && $probesLeft >= $probesPerSpy) {
                 // Nothing fresh we can beat — refresh the richest stale entry so next tick can decide.
                 $coords = "{$staleTarget['galaxy']}:{$staleTarget['system']}:{$staleTarget['planet']}";
-                if (!$dryRun) {
+                // Fix 2 (13 Sep): a human planet another bot scanned recently is reused, not re-probed.
+                $shared = $this->isHumanPlayer((int) ($staleTarget['user_id'] ?? 0))
+                    ? $this->borrowHumanIntel($bot->id, (int) $staleTarget['galaxy'], (int) $staleTarget['system'], (int) $staleTarget['planet'], (int) ($staleTarget['scanned_at'] ?? 0), $dryRun)
+                    : 0;
+                if ($shared > 0) {
+                    $this->sharedIntelHits++;
+                    if ($dryRun) {
+                        $this->line("  [{$bot->id}] SHARE: {$coords} scanned " . intdiv(time() - $shared, 60) . "m ago by another bot — no refresh probe");
+                    }
+                } elseif (!$dryRun) {
                     if ($this->dispatcher->sendSpy($planet, $user, $staleTarget, $probesPerSpy)) {
                         $result['spied'] = true;
                         $result['spy_target'] = "{$coords} (refresh)";
@@ -1454,6 +1530,86 @@ class BotTick extends Command
 
     /** Live ships + defences rows looked up this tick: "g:s:p" => columns. */
     private array $liveDefenderCache = [];
+
+    /** True for a human player (users.bot_profile IS NULL). Cached for the tick. */
+    private function isHumanPlayer(int $userId): bool
+    {
+        if ($userId <= 0) {
+            return false;
+        }
+        if (!array_key_exists($userId, $this->humanIds)) {
+            $this->humanIds[$userId] = DB::table('users')->where('id', $userId)->whereNull('bot_profile')->exists();
+        }
+
+        return $this->humanIds[$userId];
+    }
+
+    /**
+     * Planets this bot has given up on (fix 1): "g:s:p" => unix time the skip ends.
+     *
+     * @return array<string, int>
+     */
+    private function loadSkips(int $botId): array
+    {
+        $out = [];
+        $rows = DB::table('bot_target_skip')
+            ->where('bot_user_id', $botId)
+            ->where('until', '>', time())
+            ->get(['galaxy', 'system', 'planet', 'until']);
+        foreach ($rows as $row) {
+            $out["{$row->galaxy}:{$row->system}:{$row->planet}"] = (int) $row->until;
+        }
+
+        return $out;
+    }
+
+    /**
+     * Record that the battle engine rejected this target (fix 1). Only called for planets not already on
+     * the list, so an active skip is never extended tick after tick.
+     *
+     * @param  array<string, mixed>  $target  intel row (galaxy/system/planet)
+     */
+    private function rememberUnwinnable(int $botId, array $target, bool $dryRun): void
+    {
+        if ($dryRun) {
+            return;
+        }
+        DB::table('bot_target_skip')->updateOrInsert(
+            ['bot_user_id' => $botId, 'galaxy' => (int) $target['galaxy'], 'system' => (int) $target['system'], 'planet' => (int) $target['planet']],
+            ['until' => time() + self::UNWINNABLE_SKIP_SECONDS, 'set_at' => time(), 'reason' => 'sim-rejected']
+        );
+    }
+
+    /**
+     * Freshest usable scan of a human-owned planet by ANY bot inside HUMAN_INTEL_SHARE_SECONDS (fix 2).
+     * If it is another bot's and newer than this bot's own latest scan it is cloned into this bot's intel
+     * so the attack phase can use it. Returns that scanned_at, or 0 when nobody has looked recently
+     * (=> go ahead and probe).
+     */
+    private function borrowHumanIntel(int $botId, int $galaxy, int $system, int $planet, int $ownLatest, bool $dryRun): int
+    {
+        $row = DB::table('bot_intel')
+            ->where('galaxy', $galaxy)
+            ->where('system', $system)
+            ->where('planet', $planet)
+            ->where('scanned_at', '>', time() - self::HUMAN_INTEL_SHARE_SECONDS)
+            ->where('expires_at', '>', time())
+            ->orderByDesc('scanned_at')
+            ->first();
+        if ($row === null) {
+            return 0;
+        }
+
+        $scannedAt = (int) $row->scanned_at;
+        if ((int) $row->bot_user_id !== $botId && $scannedAt > $ownLatest && !$dryRun) {
+            $copy = (array) $row;
+            unset($copy['id']);
+            $copy['bot_user_id'] = $botId;
+            DB::table('bot_intel')->insert($copy);
+        }
+
+        return $scannedAt;
+    }
 
     /**
      * Current ships + defences on a planet (empty array if the planet doesn't exist).
