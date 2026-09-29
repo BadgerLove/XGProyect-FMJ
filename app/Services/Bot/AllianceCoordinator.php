@@ -28,11 +28,19 @@ class AllianceCoordinator
     /**
      * Find bots under attack that need defensive support.
      *
+     * Only allies are helped: until 29 Sep any bot within 20 systems sent half its fleet plus ALL
+     * its resources by Deploy — 427 gifts / 315M resources a day to bots it had no tie to.
+     * A bot with no alliance ($allyId 0) never helps.
+     *
      * @param  array<string, mixed>  $botPlanet
-     * @return array{target_galaxy: int, target_system: int, target_planet: int, attacker_strength: int}|null
+     * @return array{target_galaxy: int, target_system: int, target_planet: int, attacker_strength: int, arrival_time: int}|null
      */
-    public function findDefensiveOpportunity(array $botPlanet): ?array
+    public function findDefensiveOpportunity(array $botPlanet, int $allyId = 0): ?array
     {
+        if ($allyId <= 0) {
+            return null;
+        }
+
         $prefix = DB::getTablePrefix();
         $botGalaxy = (int) $botPlanet['planet_galaxy'];
         $botSystem = (int) $botPlanet['planet_system'];
@@ -50,7 +58,7 @@ class AllianceCoordinator
                 f.`fleet_end_planet`,
                 f.`fleet_array`,
                 f.`fleet_amount`,
-                f.`fleet_end_time`,
+                f.`fleet_start_time` AS `arrival_time`,
                 p.`planet_user_id`
             FROM `{$prefix}fleets` AS f
             INNER JOIN `{$prefix}planets` AS p
@@ -60,16 +68,17 @@ class AllianceCoordinator
                 AND p.`planet_type` = 1
             INNER JOIN `{$prefix}users` AS u
                 ON u.`id` = p.`planet_user_id`
-            WHERE f.`fleet_mission` = 1
+            WHERE f.`fleet_mission` IN (1, 2)
                 AND f.`fleet_mess` = 0
-                AND f.`fleet_end_time` > ?
+                AND f.`fleet_start_time` > ?
                 AND f.`fleet_end_galaxy` = ?
                 AND f.`fleet_end_system` BETWEEN ? AND ?
                 AND p.`planet_user_id` != ?
                 AND u.`email` LIKE '%@bots.local'
-            ORDER BY f.`fleet_end_time` ASC
+                AND u.`ally_id` = ?
+            ORDER BY f.`fleet_start_time` ASC
             LIMIT 10",
-            [$now, $botGalaxy, $systemMin, $systemMax, $botUserId]
+            [$now, $botGalaxy, $systemMin, $systemMax, $botUserId, $allyId]
         );
 
         foreach ($attacks as $attack) {
@@ -84,8 +93,9 @@ class AllianceCoordinator
                 continue;
             }
 
-            // Check if the attack arrives soon (within 30 min)
-            $arrivalTime = (int) $attack['fleet_end_time'];
+            // Check if the attack arrives soon (within 30 min). fleet_start_time is the arrival;
+            // fleet_end_time is the return for human fleets.
+            $arrivalTime = (int) $attack['arrival_time'];
 
             if ($arrivalTime - $now > 1800) {
                 continue; // Too far away, skip
@@ -96,6 +106,7 @@ class AllianceCoordinator
                 'target_system'    => (int) $attack['fleet_end_system'],
                 'target_planet'    => (int) $attack['fleet_end_planet'],
                 'attacker_strength' => $attackerStrength,
+                'arrival_time'     => $arrivalTime,
             ];
         }
 

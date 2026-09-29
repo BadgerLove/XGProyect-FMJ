@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Xgp\App\Core\Concerns\PreparesLegacySql;
 use Xgp\App\Core\Enumerators\MissionsEnumerator as Missions;
+use Xgp\App\Core\Objects;
 use Xgp\App\Libraries\FleetsLib;
 
 /**
@@ -67,7 +68,7 @@ class FleetDispatcher
             'fleet_start_galaxy'    => $botPlanet['planet_galaxy'],
             'fleet_start_system'    => $botPlanet['planet_system'],
             'fleet_start_planet'    => $botPlanet['planet_planet'],
-            'fleet_start_type'      => 1,
+            'fleet_start_type'      => $this->originType($botPlanet),
             'fleet_end_time'        => $arrivalTime,
             'fleet_end_stay'        => 0,
             'fleet_end_galaxy'      => $target['galaxy'],
@@ -142,7 +143,7 @@ class FleetDispatcher
             'fleet_start_galaxy'    => $botPlanet['planet_galaxy'],
             'fleet_start_system'    => $botPlanet['planet_system'],
             'fleet_start_planet'    => $botPlanet['planet_planet'],
-            'fleet_start_type'      => 1,
+            'fleet_start_type'      => $this->originType($botPlanet),
             'fleet_end_time'        => $arrivalTime,
             'fleet_end_stay'        => 0,
             'fleet_end_galaxy'      => $target['galaxy'],
@@ -168,11 +169,12 @@ class FleetDispatcher
      * @param  array<string, mixed>  $botUser
      * @param  array{galaxy: int, system: int, planet: int, type: int}  $destination
      * @param  array<int, int>  $ships  Ship ID => count
-     * @param  int  $stayDuration  How long to stay (seconds)
+     * @param  int  $stayDuration  Unused by the game's Deploy handler (kept for callers)
+     * @param  array{metal?: int, crystal?: int, deuterium?: int}|null  $cargo  What to carry (null = everything)
      *
      * @return int|null Fleet ID
      */
-    public function sendDeploy(array $botPlanet, array $botUser, array $destination, array $ships, int $stayDuration): ?int
+    public function sendDeploy(array $botPlanet, array $botUser, array $destination, array $ships, int $stayDuration, ?array $cargo = null): ?int
     {
         // Verify bot has enough ships
         foreach ($ships as $shipId => $count) {
@@ -203,10 +205,19 @@ class FleetDispatcher
         }
         $this->deductFuel($botPlanet['planet_id'], $fuel);
 
-        // Also carry resources on the fleet (fleet save includes resources)
-        $metal = (int) ($botPlanet['planet_metal'] ?? 0);
-        $crystal = (int) ($botPlanet['planet_crystal'] ?? 0);
-        $deutRemaining = max(0, (int) ($botPlanet['planet_deuterium'] ?? 0) - $fuel);
+        // Carry what the ships can hold. Deploy is one-way: the cargo stays at the destination.
+        // Until 29 Sep this loaded EVERYTHING whatever the hold size, and was used for fleet saves
+        // (stranding it on the moon) and for "support" to other bots (giving it away).
+        // $cargo overrides what to carry (moon return keeps the next lunar building's cost behind).
+        $metal = (int) ($cargo['metal'] ?? $botPlanet['planet_metal'] ?? 0);
+        $crystal = (int) ($cargo['crystal'] ?? $botPlanet['planet_crystal'] ?? 0);
+        $deutRemaining = (int) ($cargo['deuterium'] ?? max(0, (int) ($botPlanet['planet_deuterium'] ?? 0) - $fuel));
+        [$metal, $crystal, $deutRemaining] = $this->clampToCapacity($ships, $botUser, $metal, $crystal, $deutRemaining);
+        // Never more than the planet holds after the fuel (deductResources floors at 0, so an
+        // over-sized load would create resources)
+        $metal = min($metal, max(0, (int) ($botPlanet['planet_metal'] ?? 0)));
+        $crystal = min($crystal, max(0, (int) ($botPlanet['planet_crystal'] ?? 0)));
+        $deutRemaining = min($deutRemaining, max(0, (int) ($botPlanet['planet_deuterium'] ?? 0) - $fuel));
 
         // Deduct resources from planet
         $this->deductResources($botPlanet['planet_id'], $metal, $crystal, $deutRemaining);
@@ -225,7 +236,7 @@ class FleetDispatcher
             'fleet_start_galaxy'    => $botPlanet['planet_galaxy'],
             'fleet_start_system'    => $botPlanet['planet_system'],
             'fleet_start_planet'    => $botPlanet['planet_planet'],
-            'fleet_start_type'      => 1,
+            'fleet_start_type'      => $this->originType($botPlanet),
             'fleet_end_time'        => $arrivalTime + $stayDuration,
             'fleet_end_stay'        => $arrivalTime,
             'fleet_end_galaxy'      => $destination['galaxy'],
@@ -236,6 +247,91 @@ class FleetDispatcher
             'fleet_resource_metal'  => $metal,
             'fleet_resource_crystal' => $crystal,
             'fleet_resource_deuterium' => $deutRemaining,
+            'fleet_fuel'            => $fuel,
+            'fleet_target_owner'    => 0,
+            'fleet_group'           => '0',
+            'fleet_mess'            => 0,
+            'fleet_creation'        => $now,
+        ]);
+    }
+
+    /**
+     * Send a hold mission (Missions::STAY): fly to the destination, park there until the stay
+     * ends, then fly home with ships AND cargo (legacy Stay.php restores to the start planet).
+     *
+     * While parked (fleet_start_time < now <= fleet_end_stay) the fleet fights in any battle at
+     * the destination (Attack.php getAllFleetsByEndCoordsAndTimes). Used for fleet saves and for
+     * defensive support; both used Deploy until 29 Sep, which never came back.
+     *
+     * @param  array<string, mixed>  $botPlanet
+     * @param  array<string, mixed>  $botUser
+     * @param  array{galaxy: int, system: int, planet: int, type?: int}  $destination
+     * @param  array<int, int>  $ships  Ship ID => count
+     * @param  int  $stayDuration  Seconds to hold after arriving
+     * @param  bool  $carryResources  Load the planet's resources (up to the fleet's capacity)
+     *
+     * @return int|null Fleet ID
+     */
+    public function sendHold(array $botPlanet, array $botUser, array $destination, array $ships, int $stayDuration, bool $carryResources): ?int
+    {
+        foreach ($ships as $shipId => $count) {
+            if ((int) ($botPlanet[$this->getShipColumn($shipId)] ?? 0) < $count) {
+                return null;
+            }
+        }
+
+        $target = ['galaxy' => $destination['galaxy'], 'system' => $destination['system'], 'planet' => $destination['planet']];
+        $fuel = $this->calculateFuel($ships, $botPlanet, $botUser, $target);
+
+        if ($fuel === null || (float) ($botPlanet['planet_deuterium'] ?? 0) < $fuel) {
+            return null;
+        }
+
+        if (!$this->deductShips($botPlanet['planet_id'], $ships)) {
+            return null;
+        }
+        $this->deductFuel($botPlanet['planet_id'], $fuel);
+
+        $metal = 0;
+        $crystal = 0;
+        $deut = 0;
+
+        if ($carryResources) {
+            [$metal, $crystal, $deut] = $this->clampToCapacity(
+                $ships,
+                $botUser,
+                (int) ($botPlanet['planet_metal'] ?? 0),
+                (int) ($botPlanet['planet_crystal'] ?? 0),
+                max(0, (int) ($botPlanet['planet_deuterium'] ?? 0) - $fuel)
+            );
+            $this->deductResources($botPlanet['planet_id'], $metal, $crystal, $deut);
+        }
+
+        $flightDuration = $this->calculateFlightDuration($ships, $botPlanet, $botUser, $target);
+        $now = time();
+        $arrivalTime = $now + $flightDuration;
+        $stayEnd = $arrivalTime + max(0, $stayDuration);
+
+        return $this->insertFleet([
+            'fleet_owner'           => $botPlanet['planet_user_id'],
+            'fleet_mission'         => Missions::STAY,
+            'fleet_amount'          => array_sum($ships),
+            'fleet_array'           => serialize($ships),
+            'fleet_start_time'      => $arrivalTime,
+            'fleet_start_galaxy'    => $botPlanet['planet_galaxy'],
+            'fleet_start_system'    => $botPlanet['planet_system'],
+            'fleet_start_planet'    => $botPlanet['planet_planet'],
+            'fleet_start_type'      => $this->originType($botPlanet),
+            'fleet_end_time'        => $stayEnd + $flightDuration,
+            'fleet_end_stay'        => $stayEnd,
+            'fleet_end_galaxy'      => $destination['galaxy'],
+            'fleet_end_system'      => $destination['system'],
+            'fleet_end_planet'      => $destination['planet'],
+            'fleet_end_type'        => $destination['type'] ?? 1,
+            'fleet_target_obj'      => 0,
+            'fleet_resource_metal'  => $metal,
+            'fleet_resource_crystal' => $crystal,
+            'fleet_resource_deuterium' => $deut,
             'fleet_fuel'            => $fuel,
             'fleet_target_owner'    => 0,
             'fleet_group'           => '0',
@@ -304,7 +400,7 @@ class FleetDispatcher
             'fleet_start_galaxy'    => $botPlanet['planet_galaxy'],
             'fleet_start_system'    => $botPlanet['planet_system'],
             'fleet_start_planet'    => $botPlanet['planet_planet'],
-            'fleet_start_type'      => 1,
+            'fleet_start_type'      => $this->originType($botPlanet),
             'fleet_end_time'        => $arrivalTime,
             'fleet_end_stay'        => 0,
             'fleet_end_galaxy'      => $target['galaxy'],
@@ -379,7 +475,7 @@ class FleetDispatcher
             'fleet_start_galaxy'    => $botPlanet['planet_galaxy'],
             'fleet_start_system'    => $botPlanet['planet_system'],
             'fleet_start_planet'    => $botPlanet['planet_planet'],
-            'fleet_start_type'      => 1,
+            'fleet_start_type'      => $this->originType($botPlanet),
             'fleet_end_time'        => $arrivalTime + $flightDuration,
             'fleet_end_stay'        => 0,
             'fleet_end_galaxy'      => $target['galaxy'],
@@ -473,7 +569,7 @@ class FleetDispatcher
             'fleet_start_galaxy'    => $botPlanet['planet_galaxy'],
             'fleet_start_system'    => $botPlanet['planet_system'],
             'fleet_start_planet'    => $botPlanet['planet_planet'],
-            'fleet_start_type'      => 1,
+            'fleet_start_type'      => $this->originType($botPlanet),
             'fleet_end_time'        => $returnArrival,
             'fleet_end_stay'        => $stayEndTime,
             'fleet_end_galaxy'      => $targetGalaxy,
@@ -493,14 +589,16 @@ class FleetDispatcher
     }
 
     /**
-     * Count how many active expeditions a user has flying.
+     * Count the expeditions a user has out — outbound, exploring or returning. The game's own
+     * slot check (legacy Libraries/Game/Fleets.php) counts every expedition row; until 29 Sep
+     * this counted outbound only, so returning fleets freed their slot early and 23 bots were
+     * over their limit.
      */
     public function countActiveExpeditions(int $userId): int
     {
         return (int) DB::table('fleets')
             ->where('fleet_owner', $userId)
             ->where('fleet_mission', Missions::EXPEDITION)
-            ->where('fleet_mess', 0)
             ->count();
     }
 
@@ -509,34 +607,31 @@ class FleetDispatcher
      *
      * @param  array<string, mixed>  $botPlanet
      * @param  array<string, mixed>  $botUser
-     * @param  array{galaxy: int, system: int, planet: int}  $destination
+     * @param  array{galaxy: int, system: int, planet: int, type?: int}  $destination  type 3 = the moon
      * @param  int  $metal
      * @param  int  $crystal
      * @param  int  $deuterium
      *
      * @return int|null Fleet ID
      */
-    public function sendTransport(array $botPlanet, array $botUser, array $destination, int $metal, int $crystal, int $deuterium): ?int
+    public function sendTransport(array $botPlanet, array $botUser, array $destination, int $metal, int $crystal, int $deuterium, ?array $withShips = null): ?int
     {
-        // Find the best cargo ship available
-        $bigCargo = (int) ($botPlanet['ship_big_cargo_ship'] ?? 0);
-        $smallCargo = (int) ($botPlanet['ship_small_cargo_ship'] ?? 0);
-
-        $totalResources = $metal + $crystal + $deuterium;
-        $bigCargoCapacity = 25000;
-        $smallCargoCapacity = 5000;
-
-        $ships = [];
-
-        if ($bigCargo > 0) {
-            $needed = (int) ceil($totalResources / $bigCargoCapacity);
-            $ships[203] = min($bigCargo, $needed);
-        } elseif ($smallCargo > 0) {
-            $needed = (int) ceil($totalResources / $smallCargoCapacity);
-            $ships[202] = min($smallCargo, $needed);
+        if ($withShips !== null) {
+            // Caller chose the fleet (moon return shuttles with every ship on the moon)
+            $ships = $withShips;
         } else {
-            return null; // No cargo ships
+            $ships = $this->pickCargoShips($botPlanet, $botUser, $metal + $crystal + $deuterium);
+            if ($ships === null) {
+                return null; // No cargo ships
+            }
         }
+
+        // Too few ships for the whole load: carry what fits. Until 29 Sep the full amount flew
+        // anyway (692K in 3 Small Cargos).
+        [$metal, $crystal, $deuterium] = $this->clampToCapacity($ships, $botUser, $metal, $crystal, $deuterium);
+        // ...and never more than the planet holds (the caller's figures can be from before a spend)
+        $metal = min($metal, max(0, (int) ($botPlanet['planet_metal'] ?? 0)));
+        $crystal = min($crystal, max(0, (int) ($botPlanet['planet_crystal'] ?? 0)));
 
         // Verify we have enough ships
         foreach ($ships as $shipId => $count) {
@@ -545,13 +640,16 @@ class FleetDispatcher
                 return null;
             }
         }
-
         $fuel = $this->calculateFuel($ships, $botPlanet, $botUser, $destination);
         if ($fuel === null) {
             return null;
         }
 
         $deuteriumAvailable = (float) ($botPlanet['planet_deuterium'] ?? 0);
+        if ($withShips !== null) {
+            // Shuttle: carry the deuterium that is left after paying the fuel
+            $deuterium = (int) min($deuterium, max(0, $deuteriumAvailable - $fuel));
+        }
         if ($deuteriumAvailable < $fuel + $deuterium) {
             return null;
         }
@@ -577,13 +675,14 @@ class FleetDispatcher
             'fleet_start_galaxy'    => $botPlanet['planet_galaxy'],
             'fleet_start_system'    => $botPlanet['planet_system'],
             'fleet_start_planet'    => $botPlanet['planet_planet'],
-            'fleet_start_type'      => 1,
-            'fleet_end_time'        => $arrivalTime,
+            'fleet_start_type'      => $this->originType($botPlanet),
+            // Home after the return leg (was = arrival: the ships reappeared at home on delivery)
+            'fleet_end_time'        => $arrivalTime + $flightDuration,
             'fleet_end_stay'        => 0,
             'fleet_end_galaxy'      => $destination['galaxy'],
             'fleet_end_system'      => $destination['system'],
             'fleet_end_planet'      => $destination['planet'],
-            'fleet_end_type'        => 1,
+            'fleet_end_type'        => $destination['type'] ?? 1,
             'fleet_target_obj'      => 0,
             'fleet_resource_metal'  => $metal,
             'fleet_resource_crystal' => $crystal,
@@ -594,6 +693,28 @@ class FleetDispatcher
             'fleet_mess'            => 0,
             'fleet_creation'        => $now,
         ]);
+    }
+
+    /**
+     * Cargo ships for a load: Large Cargos if any, else Small Cargos, as many as it needs.
+     *
+     * @return array<int, int>|null
+     */
+    private function pickCargoShips(array $botPlanet, array $botUser, int $totalResources): ?array
+    {
+        $bigCargo = (int) ($botPlanet['ship_big_cargo_ship'] ?? 0);
+        $smallCargo = (int) ($botPlanet['ship_small_cargo_ship'] ?? 0);
+        $hyper = (int) ($botUser['research_hyperspace_technology'] ?? 0);
+
+        if ($bigCargo > 0) {
+            return [203 => min($bigCargo, max(1, (int) ceil($totalResources / FleetsLib::getMaxStorage(25000, $hyper))))];
+        }
+
+        if ($smallCargo > 0) {
+            return [202 => min($smallCargo, max(1, (int) ceil($totalResources / FleetsLib::getMaxStorage(5000, $hyper))))];
+        }
+
+        return null;
     }
 
     /**
@@ -608,13 +729,12 @@ class FleetDispatcher
     }
 
     /**
-     * Count all fleets a bot currently has flying (any mission).
+     * Count all fleets a bot has out (any mission, any state) — the game's fleet-slot rule.
      */
     public function countActiveFleets(int $userId): int
     {
         return (int) DB::table('fleets')
             ->where('fleet_owner', $userId)
-            ->where('fleet_mess', 0)
             ->count();
     }
 
@@ -637,6 +757,65 @@ class FleetDispatcher
         }
 
         return $query->exists();
+    }
+
+    /**
+     * Seconds a fleet needs to fly from $botPlanet to $target (100 % speed, as every bot send).
+     *
+     * @param  array<int, int>  $ships
+     * @param  array{galaxy: int, system: int, planet: int}  $target
+     */
+    public function flightSeconds(array $ships, array $botPlanet, array $botUser, array $target): int
+    {
+        return $this->calculateFlightDuration($ships, $botPlanet, $botUser, $target);
+    }
+
+    /**
+     * Total cargo space of a fleet, with the hyperspace bonus, from the game's own price list.
+     *
+     * @param  array<int, int>  $ships
+     */
+    public function cargoCapacity(array $ships, array $botUser): int
+    {
+        $prices = Objects::getInstance()->getPrice();
+        $hyper = (int) ($botUser['research_hyperspace_technology'] ?? 0);
+        $capacity = 0;
+
+        foreach ($ships as $shipId => $count) {
+            $capacity += (int) $count * FleetsLib::getMaxStorage((int) ($prices[$shipId]['capacity'] ?? 0), $hyper);
+        }
+
+        return $capacity;
+    }
+
+    /**
+     * Fit metal/crystal/deuterium into the fleet's hold, filling metal, then crystal, then deut.
+     *
+     * @param  array<int, int>  $ships
+     * @return array{0: int, 1: int, 2: int}
+     */
+    private function clampToCapacity(array $ships, array $botUser, int $metal, int $crystal, int $deuterium): array
+    {
+        $free = $this->cargoCapacity($ships, $botUser);
+        $metal = max(0, min($metal, $free));
+        $free -= $metal;
+        $crystal = max(0, min($crystal, $free));
+        $free -= $crystal;
+        $deuterium = max(0, min($deuterium, $free));
+
+        return [$metal, $crystal, $deuterium];
+    }
+
+    /**
+     * The origin's real type (1 planet, 3 moon). Every send wrote 1 until 29 Sep, so fleets that
+     * left a moon came home to the planet and moon-origin fleets were invisible to
+     * hasActiveFleetFromPlanet(..., 3).
+     *
+     * @param  array<string, mixed>  $botPlanet
+     */
+    private function originType(array $botPlanet): int
+    {
+        return (int) ($botPlanet['planet_type'] ?? 1);
     }
 
     /**

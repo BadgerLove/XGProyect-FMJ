@@ -40,6 +40,12 @@ class BotTick extends Command
     /** Fleet slots to leave free for spying/attacking when sending expeditions. */
     private const EXPEDITION_KEEP_FREE_SLOTS = 2;
 
+    /** Expeditions go to a system within this many of home (was up to 399 away until 29 Sep). */
+    private const EXPEDITION_RANGE = 20;
+
+    /** Attack origin needs this much deuterium to be preferred (raids cost 3-9K fuel). */
+    private const ORIGIN_MIN_DEUTERIUM = 10000;
+
     /** Don't re-probe a planet scanned more recently than this (seconds). */
     private const SPY_REFRESH_SECONDS = 1800;
 
@@ -185,7 +191,7 @@ class BotTick extends Command
 
         $this->info("Processing {$bots->count()} bots..." . ($dryRun ? ' (DRY RUN)' : ''));
 
-        $stats = ['processed' => 0, 'built' => 0, 'ships' => 0, 'researches' => 0, 'attacks' => 0, 'spies' => 0, 'fleet_saves' => 0, 'expeditions' => 0, 'harvests' => 0, 'skipped' => 0, 'errors' => 0, 'idle_planets' => 0, 'escalated' => 0, 'stuck' => 0, 'reserved' => 0];
+        $stats = ['processed' => 0, 'built' => 0, 'ships' => 0, 'researches' => 0, 'attacks' => 0, 'spies' => 0, 'fleet_saves' => 0, 'expeditions' => 0, 'harvests' => 0, 'skipped' => 0, 'errors' => 0, 'idle_planets' => 0, 'escalated' => 0, 'stuck' => 0, 'reserved' => 0, 'moon_returns' => 0];
 
         if ($this->ladder->isEnabled()) {
             $assume = (int) $this->option('ladder-assume-idle');
@@ -229,6 +235,7 @@ class BotTick extends Command
                 $stats['escalated'] += $result['escalated'];
                 $stats['stuck'] += $result['stuck'];
                 $stats['reserved'] += $result['reserved'];
+                $stats['moon_returns'] += $result['moon_returns'];
 
                 if ($result['built']) {
                     $stats['built']++;
@@ -338,11 +345,11 @@ class BotTick extends Command
     {
         try {
             $line = sprintf(
-                "%s | %sprocessed=%d skipped=%d built=%d ships=%d research=%d attacks=%d spies=%d shared=%d saves=%d expeditions=%d harvests=%d errors=%d | idle_planets=%d escalated=%d stuck=%d reserved=%d | %.1fs\n",
+                "%s | %sprocessed=%d skipped=%d built=%d ships=%d research=%d attacks=%d spies=%d shared=%d saves=%d expeditions=%d harvests=%d moon_returns=%d errors=%d | idle_planets=%d escalated=%d stuck=%d reserved=%d | %.1fs\n",
                 date('Y-m-d H:i:s'),
                 $dryRun ? 'DRY ' : '',
                 $stats['processed'], $stats['skipped'], $stats['built'], $stats['ships'], $stats['researches'],
-                $stats['attacks'], $stats['spies'], $this->sharedIntelHits, $stats['fleet_saves'], $stats['expeditions'], $stats['harvests'] ?? 0, $stats['errors'],
+                $stats['attacks'], $stats['spies'], $this->sharedIntelHits, $stats['fleet_saves'], $stats['expeditions'], $stats['harvests'] ?? 0, $stats['moon_returns'] ?? 0, $stats['errors'],
                 $stats['idle_planets'] ?? 0, $stats['escalated'] ?? 0, $stats['stuck'] ?? 0, $stats['reserved'] ?? 0,
                 $elapsed
             );
@@ -363,7 +370,7 @@ class BotTick extends Command
             'built' => false, 'ship_built' => false, 'attacked' => false, 'spied' => false, 'fleet_saved' => false, 'expeditions' => 0, 'harvests' => 0,
             'building' => null, 'ship' => null, 'research' => null,
             'attack_target' => null, 'spy_target' => null,
-            'idle_planets' => 0, 'escalated' => 0, 'stuck' => 0, 'reserved' => 0,
+            'idle_planets' => 0, 'escalated' => 0, 'stuck' => 0, 'reserved' => 0, 'moon_returns' => 0,
         ];
 
         // Load ALL planets for this bot (not just first)
@@ -410,9 +417,6 @@ class BotTick extends Command
         $profile = json_decode((string) ($bot->bot_profile ?? '{}'), true);
         $personality = $profile['personality'] ?? 'raider';
 
-        // Track best attack origin — prefer moons (harder for victims to trace)
-        $attackPlanet = null;
-        $attackMoon = null;
         $researchQueued = false;
 
         // --- PER-PLANET LOOP ---
@@ -634,8 +638,10 @@ class BotTick extends Command
                 }
             }
 
-            // Resource trading
-            if (!$this->dispatcher->hasActiveFleetFromPlanet($planet['planet_galaxy'], $planet['planet_system'], $planet['planet_planet'])) {
+            // Resource trading — planets only: a moon's stock goes home to its own planet (Phase 4.8)
+            if (((int) ($planet['planet_type'] ?? 1)) === 1
+                && !$this->dispatcher->hasActiveFleetFromPlanet($planet['planet_galaxy'], $planet['planet_system'], $planet['planet_planet'])
+            ) {
                 $tradeOpportunity = $this->trader->findSharingOpportunity($planet, $user);
 
                 if ($tradeOpportunity !== null) {
@@ -727,9 +733,15 @@ class BotTick extends Command
                 }
             }
 
-            // Alliance coordination
-            if (!$this->dispatcher->hasActiveFleetFromPlanet($planet['planet_galaxy'], $planet['planet_system'], $planet['planet_planet'])) {
-                $supportTarget = $this->alliance->findDefensiveOpportunity($planet);
+            // Alliance coordination — defensive support for an ALLY under attack: a hold (the ships
+            // defend, then fly home), no cargo, and only if it lands before the attack. Until 29 Sep
+            // this was a Deploy to any bot nearby carrying all the sender's resources — the ships
+            // and ~315M resources a day were simply given away.
+            if (!$this->dispatcher->hasActiveFleetFromPlanet(
+                (int) $planet['planet_galaxy'], (int) $planet['planet_system'], (int) $planet['planet_planet'],
+                (int) ($planet['planet_type'] ?? 1)
+            )) {
+                $supportTarget = $this->alliance->findDefensiveOpportunity($planet, (int) ($user['ally_id'] ?? 0));
 
                 if ($supportTarget !== null) {
                     $supportFleet = $this->alliance->getAvailableSupportFleet($planet);
@@ -739,10 +751,13 @@ class BotTick extends Command
                             'galaxy' => $supportTarget['target_galaxy'],
                             'system' => $supportTarget['target_system'],
                             'planet' => $supportTarget['target_planet'],
+                            'type' => 1,
                         ];
+                        $landsAt = time() + $this->dispatcher->flightSeconds($supportFleet, $planet, $user, $destination);
 
-                        if (!$dryRun) {
-                            $fleetId = $this->dispatcher->sendDeploy($planet, $user, $destination, $supportFleet, 3600);
+                        if ($landsAt < $supportTarget['arrival_time'] && !$dryRun) {
+                            $stay = $supportTarget['arrival_time'] - $landsAt + 900;
+                            $fleetId = $this->dispatcher->sendHold($planet, $user, $destination, $supportFleet, $stay, false);
 
                             if ($fleetId) {
                                 $this->line("  [{$bot->id}] {$bot->name}: sending defensive support from {$planet['planet_galaxy']}:{$planet['planet_system']}:{$planet['planet_planet']}");
@@ -755,18 +770,7 @@ class BotTick extends Command
             // (Expedition dispatch moved after Phase 5 — see sendExpeditions(). Sending it here
             //  parked a fleet on the home planet before the spy/attack phase ever ran.)
 
-            // Track best attack origin — moons preferred (stealthier)
-            $combatShips = (int) ($planet['ship_light_fighter'] ?? 0)
-                + (int) ($planet['ship_heavy_fighter'] ?? 0)
-                + (int) ($planet['ship_cruiser'] ?? 0)
-                + (int) ($planet['ship_battleship'] ?? 0);
-            if ($combatShips > 0) {
-                if (((int) ($planet['planet_type'] ?? 1)) === 3) {
-                    $attackMoon = $planet; // Moon with ships — best origin
-                } elseif ($attackPlanet === null) {
-                    $attackPlanet = $planet; // Fallback: first planet with ships
-                }
-            }
+            // (The attack origin is chosen after moon return + supply — see pickAttackOrigin().)
         } // end planet loop
 
         // Process research completions (once per bot)
@@ -802,6 +806,19 @@ class BotTick extends Command
         // Runs once per bot, before attack phase so cargos aren't away raiding.
         $moonRows = array_filter($planetRows, fn ($p) => ((int) ((array) $p)['planet_type'] ?? 1) === 3);
         $moonRows = array_values($moonRows); // Re-index after filter
+
+        // --- Phase 4.8: Moon return (bring stranded ships + resources home) ---
+        // Fleet saves were one-way Deploys to the moon until 29 Sep; 178M metal and a third of all
+        // bot ships sat on moons where nothing could spend them. Saves are holds now (they come
+        // back by themselves); this drains what is already there and anything left over.
+        foreach ($moonRows as $moonRow) {
+            $moonReturnResult = $this->returnMoonStock($user, (array) $moonRow, $planetRows, $dryRun);
+            if ($moonReturnResult !== null) {
+                $this->line("  [{$bot->id}] {$bot->name}: moon return → {$moonReturnResult}");
+                $result['moon_returns']++;
+            }
+        }
+
         if (!empty($moonRows)) {
             $moonSupplyResult = $this->supplyMoons($bot, $user, $planetRows, $moonRows, $dryRun);
             if ($moonSupplyResult !== null) {
@@ -810,13 +827,12 @@ class BotTick extends Command
         }
 
         // --- Phase 5: Scout and attack ---
-        // Prefer moon as attack origin (harder for victim to trace back).
-        // If no moon with ships, use first planet with combat ships.
-        // Re-read the origin's ships and resources: $planetRows was loaded before Phase 0, and a fleet
-        // save there has since deployed everything to the moon. Spying/attacking from the stale row
-        // spent probes the planet no longer had (2:401:7 went to -3 on 13 Sep) and OPBE throws on a
-        // negative defender count.
-        $planet = $this->refreshPlanetShips($attackMoon ?? $attackPlanet ?? (array) $planetRows[0]);
+        // Origin = the planet or moon where the real fleet is (see pickAttackOrigin()). It re-reads
+        // ships and resources: $planetRows was loaded before Phase 0, and a fleet save or moon
+        // return has since moved things. Spying/attacking from the stale row spent probes the
+        // planet no longer had (2:401:7 went to -3 on 13 Sep) and OPBE throws on a negative
+        // defender count.
+        $planet = $this->pickAttackOrigin($planetRows);
         $personality = $this->brain->getPersonality($user);
 
         // Only a spy/attack already in flight from this origin blocks the phase. Expeditions,
@@ -1242,45 +1258,13 @@ class BotTick extends Command
                 continue;
             }
 
-            // Find what the moon SHOULD build next (priority order)
-            // Don't use nextBuilding() — it checks canAfford(), which fails
-            // when the moon has 0 resources (chicken-and-egg deadlock).
-            // Instead, walk the priority list manually and find the first
-            // building that isn't maxed yet.
-            $moonBuilding = null;
-            $moonLevel = 0;
-            foreach (\App\Services\Bot\BotBrain::MOON_BUILDING_PRIORITY as $bId => $config) {
-                $lvl = $this->brain->getBuildingLevel($bId, $moon);
-                if ($lvl < $config['cap']) {
-                    // Check prerequisites
-                    $needsLunarBase = in_array($bId, [42, 43, 44], true); // Phalanx, Jump Gate, Silo
-                    $needsRF = ($bId === 43); // Jump Gate needs RF >= 1
-                    $lunarBaseLevel = $this->brain->getBuildingLevel(41, $moon);
-                    $rfLevel = $this->brain->getBuildingLevel(14, $moon);
+            $next = $this->moonNextBuilding($moon);
 
-                    if ($needsLunarBase && $lunarBaseLevel < 1) {
-                        $moonBuilding = 41; // Force Lunar Base first
-                        $moonLevel = $lunarBaseLevel;
-                        break;
-                    }
-                    if ($needsRF && $rfLevel < 1) {
-                        $moonBuilding = 14; // Force Robot Factory first
-                        $moonLevel = $rfLevel;
-                        break;
-                    }
-
-                    $moonBuilding = $bId;
-                    $moonLevel = $lvl;
-                    break;
-                }
-            }
-
-            if ($moonBuilding === null) {
+            if ($next === null) {
                 continue; // All moon buildings maxed
             }
 
-            // Calculate cost of next moon building
-            $cost = $this->getMoonBuildingCost($moonBuilding, $moonLevel);
+            ['id' => $moonBuilding, 'level' => $moonLevel, 'cost' => $cost] = $next;
 
             // Check if moon already has enough resources
             $moonMetal = (float) ($moon['planet_metal'] ?? 0);
@@ -1335,6 +1319,7 @@ class BotTick extends Command
                 'galaxy' => (int) $moon['planet_galaxy'],
                 'system' => (int) $moon['planet_system'],
                 'planet' => (int) $moon['planet_planet'],
+                'type' => 3, // the moon (type 1 = the planet itself: supply shipped to itself until 29 Sep)
             ];
 
             if (!$dryRun) {
@@ -1360,6 +1345,181 @@ class BotTick extends Command
         }
 
         return null;
+    }
+
+    /**
+     * The next building a moon should get (first entry of MOON_BUILDING_PRIORITY below its cap,
+     * with Lunar Base / Robot Factory forced first where needed) and its cost. Walks the list by
+     * hand rather than nextBuilding(): that checks canAfford(), which fails on an empty moon.
+     *
+     * @param  array<string, mixed>  $moon
+     * @return array{id: int, level: int, cost: array{metal: float, crystal: float, deuterium: float}}|null
+     */
+    private function moonNextBuilding(array $moon): ?array
+    {
+        foreach (\App\Services\Bot\BotBrain::MOON_BUILDING_PRIORITY as $bId => $config) {
+            $lvl = $this->brain->getBuildingLevel($bId, $moon);
+
+            if ($lvl >= $config['cap']) {
+                continue;
+            }
+
+            $lunarBaseLevel = $this->brain->getBuildingLevel(41, $moon);
+            $rfLevel = $this->brain->getBuildingLevel(14, $moon);
+
+            if (in_array($bId, [42, 43, 44], true) && $lunarBaseLevel < 1) { // Phalanx, Jump Gate, Silo
+                [$bId, $lvl] = [41, $lunarBaseLevel]; // Force Lunar Base first
+            } elseif ($bId === 43 && $rfLevel < 1) { // Jump Gate needs RF >= 1
+                [$bId, $lvl] = [14, $rfLevel];
+            }
+
+            return ['id' => $bId, 'level' => $lvl, 'cost' => $this->getMoonBuildingCost($bId, $lvl)];
+        }
+
+        return null;
+    }
+
+    /**
+     * Bring a moon's ships and spare resources home to its planet.
+     *
+     * Leaves the cost of the moon's next building on the moon (moon supply sends that there on
+     * purpose), and does nothing while an attack is heading for the moon or the planet, or while
+     * an earlier return/shuttle from this moon is still out. If the ships can't carry the lot in
+     * one go they shuttle it (Transport — the ships come back to the moon); once the rest fits
+     * they Deploy home for good.
+     *
+     * @param  array<string, mixed>  $moonRow
+     * @param  array<int, object|array<string, mixed>>  $planetRows
+     */
+    private function returnMoonStock(array $user, array $moonRow, array $planetRows, bool $dryRun): ?string
+    {
+        $moon = $this->refreshPlanetShips($moonRow);
+        $coords = "{$moon['planet_galaxy']}:{$moon['planet_system']}:{$moon['planet_planet']}";
+
+        $parent = null;
+        foreach ($planetRows as $row) {
+            $row = (array) $row;
+            if ((int) ($row['planet_type'] ?? 1) === 1
+                && (int) $row['planet_galaxy'] === (int) $moon['planet_galaxy']
+                && (int) $row['planet_system'] === (int) $moon['planet_system']
+                && (int) $row['planet_planet'] === (int) $moon['planet_planet']
+            ) {
+                $parent = $row;
+                break;
+            }
+        }
+
+        if ($parent === null) {
+            return null;
+        }
+
+        // Not into or out of a fight
+        if (!empty($this->protector->getIncomingAttacks($moon)) || !empty($this->protector->getIncomingAttacks($parent))) {
+            return null;
+        }
+
+        // One return at a time per moon (a shuttle is still on its way back)
+        $busy = DB::table('fleets')
+            ->where('fleet_owner', (int) $moon['planet_user_id'])
+            ->where('fleet_start_galaxy', (int) $moon['planet_galaxy'])
+            ->where('fleet_start_system', (int) $moon['planet_system'])
+            ->where('fleet_start_planet', (int) $moon['planet_planet'])
+            ->where('fleet_start_type', 3)
+            ->whereIn('fleet_mission', [Missions::TRANSPORT, Missions::DEPLOY])
+            ->exists();
+        if ($busy) {
+            return null;
+        }
+
+        $ships = [];
+        foreach ([202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 213, 214, 215] as $shipId) { // not 212: satellites can't fly
+            $count = (int) ($moon[$this->shipColumn($shipId)] ?? 0);
+            if ($count > 0) {
+                $ships[$shipId] = $count;
+            }
+        }
+
+        if (empty($ships)) {
+            return null; // Nothing that can fly; the moon spends what it holds on lunar buildings
+        }
+
+        $keep = ['metal' => 0.0, 'crystal' => 0.0, 'deuterium' => 0.0];
+        $next = $this->moonNextBuilding($moon);
+        if ($next !== null) {
+            $keep = $next['cost'];
+        }
+
+        $metal = max(0, (int) floor((float) $moon['planet_metal'] - $keep['metal']));
+        $crystal = max(0, (int) floor((float) $moon['planet_crystal'] - $keep['crystal']));
+        // Fuel comes out of the moon's deuterium too; a short-hop fuel bill is tiny, keep 1K spare
+        $deut = max(0, (int) floor((float) $moon['planet_deuterium'] - $keep['deuterium']) - 1000);
+
+        $destination = [
+            'galaxy' => (int) $moon['planet_galaxy'],
+            'system' => (int) $moon['planet_system'],
+            'planet' => (int) $moon['planet_planet'],
+            'type' => 1,
+        ];
+        $capacity = $this->dispatcher->cargoCapacity($ships, $user);
+        $load = $metal + $crystal + $deut;
+        $shipCount = array_sum($ships);
+        $what = number_format($metal) . 'M/' . number_format($crystal) . 'C/' . number_format($deut) . 'D';
+
+        if ($load > $capacity) {
+            // Shuttle a full hold; the ships come back and take the next load next tick
+            if ($dryRun) {
+                return "would shuttle {$coords} moon → planet (load {$what}, hold " . number_format($capacity) . ", {$shipCount} ships)";
+            }
+
+            $fleetId = $this->dispatcher->sendTransport($moon, $user, $destination, $metal, $crystal, $deut, $ships);
+
+            return $fleetId ? "shuttle {$coords} moon → planet ({$shipCount} ships, hold " . number_format($capacity) . ')' : null;
+        }
+
+        if ($dryRun) {
+            return "would deploy {$coords} moon → planet ({$shipCount} ships + {$what})";
+        }
+
+        $fleetId = $this->dispatcher->sendDeploy($moon, $user, $destination, $ships, 0, [
+            'metal' => $metal, 'crystal' => $crystal, 'deuterium' => $deut,
+        ]);
+
+        return $fleetId ? "deploy {$coords} moon → planet ({$shipCount} ships + {$what})" : null;
+    }
+
+    /**
+     * Where to spy and attack from: re-read every planet and moon, prefer ones with >= 3 probes and
+     * enough deuterium for a raid, and among those the most combat power. Until 29 Sep any moon with
+     * a single fighter won: 73 bots raided from moons with ~15 fighters, no cargo and rarely the 3
+     * probes a spy needs, while their real fleet sat on the planet (2391 attacks Sep 9-11 → 86).
+     *
+     * @param  array<int, object|array<string, mixed>>  $planetRows
+     * @return array<string, mixed>
+     */
+    private function pickAttackOrigin(array $planetRows): array
+    {
+        $power = [204 => 50, 205 => 150, 206 => 400, 207 => 1000, 211 => 1000, 213 => 2000, 214 => 200000, 215 => 2800];
+        $best = null;
+        $bestKey = null;
+
+        foreach ($planetRows as $row) {
+            $candidate = $this->refreshPlanetShips((array) $row);
+            $strength = 0;
+            foreach ($power as $shipId => $value) {
+                $strength += (int) ($candidate[$this->shipColumn($shipId)] ?? 0) * $value;
+            }
+
+            $ready = (int) ($candidate['ship_espionage_probe'] ?? 0) >= 3
+                && (float) ($candidate['planet_deuterium'] ?? 0) >= self::ORIGIN_MIN_DEUTERIUM;
+            $key = [$ready ? 1 : 0, $strength];
+
+            if ($bestKey === null || $key > $bestKey) {
+                $best = $candidate;
+                $bestKey = $key;
+            }
+        }
+
+        return $best ?? $this->refreshPlanetShips((array) $planetRows[0]);
     }
 
     /**
@@ -1775,16 +1935,23 @@ class BotTick extends Command
     }
 
     /**
-     * Pick a system for an expedition.
-     * Rotates around the bot's home system to spread depletion.
-     * Stays within the same galaxy.
+     * Pick a system for an expedition: within ±EXPEDITION_RANGE of home, rotating by bot and hour
+     * to spread depletion (ExpeditionService: 20 expeditions deplete a system to a 50 % floor, it
+     * recovers 2 an hour). Never the home system. Until 29 Sep this reached up to 399 systems
+     * away — ~19K deuterium per trip, about half of all bot deuterium income.
      */
     private function pickExpeditionSystem(int $galaxy, int $homeSystem, int $botId): int
     {
-        // Use bot ID + current hour to rotate systems
-        $offset = ($botId + (int) (time() / 3600)) % 400;
-        $system = ($homeSystem + $offset) % 499 + 1; // Systems 1-499
-        return $system;
+        $span = 2 * self::EXPEDITION_RANGE; // offsets -RANGE..-1, 1..RANGE
+        $step = ($botId + (int) (time() / 3600)) % $span;
+        $offset = $step < self::EXPEDITION_RANGE ? $step - self::EXPEDITION_RANGE : $step - self::EXPEDITION_RANGE + 1;
+        $system = $homeSystem + $offset;
+
+        if ($system < 1 || $system > MAX_SYSTEM_IN_GALAXY) {
+            $system = $homeSystem - $offset; // reflect off the edge of the galaxy
+        }
+
+        return max(1, min(MAX_SYSTEM_IN_GALAXY, $system));
     }
 
     /**

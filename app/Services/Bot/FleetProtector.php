@@ -12,7 +12,7 @@ use Xgp\App\Libraries\FleetsLib;
  * Protects bot planets from incoming attacks by fleet saving.
  *
  * Scans the fleets table for incoming attacks, evaluates threat level,
- * and dispatches deploy missions to move fleet + resources to safety.
+ * and sends hold missions that move fleet + resources to safety and bring them back afterwards.
  */
 class FleetProtector
 {
@@ -34,26 +34,30 @@ class FleetProtector
         $prefix = DB::getTablePrefix();
         $now = time();
 
+        // Attacks on THIS row (planet or moon — a moon used to react to attacks on its planet and
+        // "save" to itself), single or ACS, not yet landed. fleet_start_time is the arrival;
+        // fleet_end_time is the return for human fleets (bots write the arrival into both).
         $rows = DB::select(
             "SELECT
                 f.`fleet_id`,
                 f.`fleet_array`,
                 f.`fleet_amount`,
-                f.`fleet_end_time`,
+                f.`fleet_start_time` AS `fleet_end_time`,
                 f.`fleet_owner`
             FROM `{$prefix}fleets` AS f
             WHERE f.`fleet_end_galaxy` = ?
                 AND f.`fleet_end_system` = ?
                 AND f.`fleet_end_planet` = ?
-                AND f.`fleet_end_type` = 1
-                AND f.`fleet_mission` = 1
+                AND f.`fleet_end_type` = ?
+                AND f.`fleet_mission` IN (1, 2)
                 AND f.`fleet_mess` = 0
-                AND f.`fleet_end_time` > ?
-            ORDER BY f.`fleet_end_time` ASC",
+                AND f.`fleet_start_time` > ?
+            ORDER BY f.`fleet_start_time` ASC",
             [
                 (int) $botPlanet['planet_galaxy'],
                 (int) $botPlanet['planet_system'],
                 (int) $botPlanet['planet_planet'],
+                (int) ($botPlanet['planet_type'] ?? 1),
                 $now,
             ]
         );
@@ -134,8 +138,10 @@ class FleetProtector
         // Stay away for: time until attack lands + 30 minutes buffer
         $stayDuration = ($latestArrival - time()) + 1800;
 
-        // Send fleet on deploy mission
-        $fleetId = $this->dispatcher->sendDeploy($botPlanet, $botUser, $destination, $shipsToSave, $stayDuration);
+        // Hold, not Deploy: ships + resources come home by themselves when the stay ends.
+        // Deploy (until 29 Sep) left everything on the moon for good — 178M metal and a third of
+        // all bot ships had piled up there.
+        $fleetId = $this->dispatcher->sendHold($botPlanet, $botUser, $destination, $shipsToSave, $stayDuration, true);
 
         return $fleetId !== null;
     }
@@ -174,6 +180,12 @@ class FleetProtector
             return false; // Reactive save will handle it
         }
 
+        // Already saved this evening (the window is two hours long and the tick runs every 15 min)
+        // (any state: a hold that has landed is fleet_mess 2, which hasActiveFleetFromPlanet skips)
+        if ($this->hasHoldOut($botPlanet)) {
+            return false;
+        }
+
         // Gather ships
         $shipsToSave = $this->gatherShips($botPlanet);
 
@@ -200,9 +212,27 @@ class FleetProtector
 
         $stayDuration = $hoursUntilWake * 3600;
 
-        $fleetId = $this->dispatcher->sendDeploy($botPlanet, $botUser, $destination, $shipsToSave, $stayDuration);
+        // Hold until wake-up, then everything comes home (see attemptFleetSave)
+        $fleetId = $this->dispatcher->sendHold($botPlanet, $botUser, $destination, $shipsToSave, $stayDuration, true);
 
         return $fleetId !== null;
+    }
+
+    /**
+     * Does this planet/moon have a hold (fleet save) out that hasn't come home yet?
+     *
+     * @param  array<string, mixed>  $botPlanet
+     */
+    public function hasHoldOut(array $botPlanet): bool
+    {
+        return DB::table('fleets')
+            ->where('fleet_owner', (int) $botPlanet['planet_user_id'])
+            ->where('fleet_start_galaxy', (int) $botPlanet['planet_galaxy'])
+            ->where('fleet_start_system', (int) $botPlanet['planet_system'])
+            ->where('fleet_start_planet', (int) $botPlanet['planet_planet'])
+            ->where('fleet_start_type', (int) ($botPlanet['planet_type'] ?? 1))
+            ->where('fleet_mission', 5)
+            ->exists();
     }
 
     /**
@@ -258,6 +288,17 @@ class FleetProtector
         $prefix = DB::getTablePrefix();
         $userId = (int) $botPlanet['planet_user_id'];
         $currentPlanetId = (int) $botPlanet['planet_id'];
+
+        // A moon under attack goes to its own planet. Until 29 Sep a moon picked "the moon at
+        // these coordinates" — itself.
+        if ((int) ($botPlanet['planet_type'] ?? 1) === 3) {
+            return [
+                'galaxy'  => (int) $botPlanet['planet_galaxy'],
+                'system'  => (int) $botPlanet['planet_system'],
+                'planet'  => (int) $botPlanet['planet_planet'],
+                'type'    => 1,
+            ];
+        }
 
         // First choice: moon at current planet
         $moon = DB::selectOne(
