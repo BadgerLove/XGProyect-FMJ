@@ -2,11 +2,11 @@
     <tr>
     <table border="0">
         <tr>
-            <td class="c" colspan="2">{{ __('game/galaxy.gl_missil_launch') }} {{ $coords }}</td>
+            <td class="c" colspan="2">{{ __('game/galaxy.gl_missil_launch') }} {!! $coords !!}</td>
         </tr>
         <tr>
 
-            <td class="c">{{ $missile_count }} <input type="text" name="SendMI" size="2" maxlength="3" /></td>
+            <td class="c">{!! $missile_count !!} <input type="text" name="SendMI" size="2" maxlength="3" /></td>
             <td class="c">{{ __('game/galaxy.gl_objective') }}:
                 <select name="Target">
                     <option value="0" selected>{{ __('game/galaxy.gl_all_defenses') }}</option>
