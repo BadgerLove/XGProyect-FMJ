@@ -25,8 +25,8 @@
                     if (link) { link.href = data.expedition.link; }
                     var tag = document.getElementById('exp_tag');
                     if (tag) {
-                        tag.textContent = data.expedition.label;
-                        tag.style.backgroundColor = data.expedition.colour;
+                        tag.textContent = data.expedition.text;
+                        tag.style.color = data.expedition.colour;
                         tag.title = data.expedition.tooltip;
                     }
                     var space = document.getElementById('exp_space');
@@ -317,7 +317,7 @@
                             <input type="submit" value="{{ __('game/galaxy.gl_go') }}">
                         </td>
                         <td style="background-color: transparent; width: 50%; text-align: right;">
-                            <span id="exp_tag" title="{{ $expedition_space['tooltip'] }}" style="display:inline-block; margin-right:8px; padding:2px 10px; border-radius:11px; font-weight:bold; font-size:11px; color:#fff; white-space:nowrap; cursor:help; background-color:{{ $expedition_space['colour'] }};">{{ $expedition_space['label'] }}</span>
+                            <span id="exp_tag" title="{{ $expedition_space['tooltip'] }}" style="margin-right:10px; font-weight:bold; white-space:nowrap; cursor:help; color:{{ $expedition_space['colour'] }};">{{ $expedition_space['text'] }}</span>
                             <a id="exp_link" href="{{ $expedition_space['link'] }}">
                                 <input type="button" value="{{ __('game/galaxy.gl_expedition') }}">
                             </a>
@@ -347,7 +347,6 @@
                     <span id="slotUsed">{{ $maxfleetcount }}</span>/{{ $fleetmax }}
                 </span>
             </span>
-            <span id="exp_space" title="{{ $expedition_space['tooltip'] }}" style="margin-left:12px; cursor:help; color:{{ $expedition_space['colour'] }};">{{ $expedition_space['text'] }}</span>
         </th>
     </tr>
     <tr>
