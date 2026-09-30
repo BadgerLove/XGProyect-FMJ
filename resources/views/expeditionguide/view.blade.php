@@ -48,16 +48,19 @@
         <h2>The Official Guide to Expeditions</h2>
         <p>Expeditions are a great way to find resources, dark matter, and even free ships. But space is vast, dangerous, and resources aren't infinite. Here is exactly how expeditions work so you can maximize your gains and avoid getting your fleet wiped out.</p>
 
-        <h3>1. System Depletion (Don't Spam Slot 16!)</h3>
-        <p>If you keep sending expeditions to the exact same system over and over, you will deplete the sector.</p>
+        <h3>1. Expedition Space (Check Before You Send!)</h3>
+        <p>Every system only has room for a limited number of good expeditions, and it's shared by everyone: other players and the bots too.</p>
         <ul>
-            <li>A heavily visited system has a drastically higher chance of returning <strong>"Nothing."</strong></li>
-            <li><strong>How to check:</strong> Send at least <strong>1 Espionage Probe</strong> with your expedition fleet. When the fleet arrives, the probe will scan the sector and send you a message with the system's "Depletion Level" (0% is fresh, 100% is empty).</li>
-            <li>Systems naturally recover over time (regenerating around 2 visits worth of resources per hour), so rotate your fleets to different systems!</li>
+            <li>Each system has a <strong>hidden number of expedition spaces</strong> for every 6-hour period (00:00, 06:00, 12:00 and 18:00 UK time). The number is random each period: usually <strong>1 to 6</strong>, very rarely up to 15.</li>
+            <li>Your expedition takes a space when it <strong>arrives</strong>. If the system is under 100% when your fleet gets there, you have a space, even if the system fills up while you are exploring.</li>
+            <li>If the system is <strong>full (100%)</strong> when you arrive, your fleet finds the area <strong>picked clean</strong> and comes home with nothing.</li>
+            <li>Fleet size doesn't matter: one ship or a thousand, one expedition uses one space.</li>
+            <li><strong>How to check:</strong> The galaxy view shows <strong>"Expedition space: N% used"</strong> at the top right: <span style="color: #2ea043;">green</span> under 50%, <span style="color: #d69614;">amber</span> 50-99%, <span style="color: #c83737;">red</span> when full. Take at least <strong>1 Espionage Probe</strong> with your expedition and it also sends you a report with the system's %.</li>
+            <li>The % is only a hint: one expedition can fill a system that only had one space. Every system starts fresh at the next period.</li>
         </ul>
 
         <div class="highlight-box">
-            <strong>Pro Tip:</strong> Don't just blindly send to your home system. Fly to neighboring systems to find fresh expedition space!
+            <strong>Pro Tip:</strong> Don't just send to your home system every time. Flick through the neighbouring systems with the galaxy arrows and send your expedition to a green one!
         </div>
 
         <h3>2. Expedition Limits</h3>
