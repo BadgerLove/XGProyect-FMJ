@@ -135,11 +135,11 @@ class PremiumController extends BaseController
     private function setOfficierStatusWithFormat(int $item_id): string
     {
         if ($this->officerService->isOfficerActive((int) $this->user[$this->objects->getObjects($item_id)], time())) {
+            // was the raw float of days left ("12.746840277778"); now "12d 17h"
+            $left = max(0, (int) $this->user[$this->objects->getObjects($item_id)] - time());
+
             return $this->formatService->customColor(
-                (string) $this->officerService->getDaysLeft(
-                    (int) $this->user[$this->objects->getObjects($item_id)],
-                    time()
-                ),
+                intdiv($left, 86400) . 'd ' . intdiv($left % 86400, 3600) . 'h',
                 'lime'
             );
         }

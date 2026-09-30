@@ -12,7 +12,7 @@
         <tbody>
             <tr class="header">
                 <td>
-                    <table width="519">
+                    <table width="519" class="messages-table">
                         <tbody>
                             <form action="{{ $form_submit }}" method="POST" role="form">
                                 <tr>

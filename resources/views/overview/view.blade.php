@@ -1,7 +1,7 @@
 @extends('master.game')
 
 @section('content')
-<table width="519">
+<table width="519" class="overview">
     <tr>
         <td class="c" colspan="4">
             <a href="#" title="{{ __('game/overview.ov_abandon_rename') }}" onclick="f('game.php?page=planetlayer', '{{ __('game/overview.ov_abandon_rename') }} {{ $planetName }}')">

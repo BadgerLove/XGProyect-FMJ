@@ -8,7 +8,7 @@
         <th width="50%">
             <a href="game.php?page=traderResources" title="{{ __('game/trader.tr_resource_market_title') }}">
                 {{ __('game/trader.tr_resource_market') }}
-            <a>
+            </a>
         </th>
         <!--<th width="50%">
             <a href="game.php?page=traderAuctioneer" title="{tr_auctioneer_title}">{tr_auctioneer}<a>

@@ -1,7 +1,7 @@
 @extends('master.game')
 
 @section('content')
-<table width="569">
+<table width="569" class="techtree">
     <tr>
         <td class="c" colspan="2">{{ __('game/constructions.construction') }}</td>
     </tr>

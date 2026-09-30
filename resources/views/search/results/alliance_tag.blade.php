@@ -16,7 +16,7 @@
             </th>
             <th role="cell">{{ $result['alliance_members'] }}</th>
             <th role="cell">
-                <a href="game.php?page=statistics&range=1">{{ $result['alliance_points'] }}</a>
+                <a href="game.php?page=highscore&who=2&range=1">{{ $result['alliance_points'] }}</a>
             </th>
             <th role="cell">{{ $result['alliance_actions'] }}</th>
         </tr>

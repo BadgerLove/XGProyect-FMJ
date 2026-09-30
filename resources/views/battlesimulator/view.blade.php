@@ -2,196 +2,225 @@
 
 @section('content')
 <style>
-    .sim-container { max-width: 800px; margin: 0 auto; }
-    .sim-section {
-        background: #1a2a40;
+    /* Battle simulator in the game's own look (2026-10-01): the same #344566 cells, #415680
+       borders, Tahoma and td.c header bars as every other page, 519px wide like them. It used
+       to be a rounded, gradient "app" design that did not look like part of the game. */
+    .sim-container { max-width: 519px; margin: 0 auto; font-family: Tahoma, sans-serif; font-size: 11px; }
+    .sim-title {
+        font-weight: bold;
+        color: #E6EBFB;
+        text-align: center;
+        padding: 4px;
         border: 1px solid #415680;
-        border-radius: 8px;
-        padding: 16px;
-        margin-bottom: 16px;
+        background: #344566 url({{ asset('assets/upload/skins/xgproyect/img/bg1.gif') }});
+        margin-bottom: 4px;
+    }
+    .sim-section {
+        border: 1px solid #415680;
+        background: #344566;
+        margin-bottom: 4px;
     }
     .sim-section h3 {
-        color: #b1daf2;
-        font-size: 15px;
-        margin: 0 0 12px;
-        padding-bottom: 8px;
+        font-size: 11px;
+        font-weight: bold;
+        color: #E6EBFB;
+        margin: 0;
+        padding: 4px 6px;
         border-bottom: 1px solid #415680;
+        background: #344566 url({{ asset('assets/upload/skins/xgproyect/img/bg1.gif') }});
     }
-    .sim-section.attacker { border-left: 3px solid #4CAF50; }
-    .sim-section.defender { border-left: 3px solid #f44336; }
-    .sim-section.research { border-left: 3px solid #2196F3; }
+    .sim-section h3 + .sim-grid, .sim-section h3 + .sim-research-grid, .sim-section .info-text + .sim-resources-grid { margin-top: 0; }
+    .sim-section.attacker h3:first-child { color: #7CFC00; }
+    .sim-section.defender h3:first-child { color: #ff6b6b; }
     .sim-grid {
         display: grid;
         grid-template-columns: 1fr 1fr;
-        gap: 8px;
+        gap: 1px;
+        background: #415680;
+        border-bottom: 1px solid #415680;
     }
+    /* odd count (13 ships): the last one spans the row instead of leaving a gap */
+    .sim-grid > .sim-field:last-child:nth-child(odd) { grid-column: 1 / -1; }
     .sim-field {
         display: flex;
         align-items: center;
-        gap: 8px;
-        padding: 4px 0;
+        gap: 6px;
+        padding: 3px 6px;
+        background: #344566;
     }
     .sim-field label {
         flex: 1;
-        font-size: 12px;
-        color: #b1daf2;
+        min-width: 0;
+        color: #E6EBFB;
+        font-weight: bold;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
     }
-    .sim-field input {
+    .sim-field input,
+    .sim-research-field input {
         width: 80px;
-        background: #0d1b2a;
+        box-sizing: border-box;
+        background: #1a2a40;
         border: 1px solid #415680;
         color: #E6EBFB;
-        padding: 6px 8px;
-        font-size: 13px;
+        padding: 2px 4px;
+        font: 11px Tahoma, sans-serif;
         text-align: right;
-        border-radius: 4px;
     }
-    .sim-field input:focus {
-        border-color: #619fc8;
-        outline: none;
-    }
-    .sim-research-grid {
+    .sim-field input:focus,
+    .sim-research-field input:focus { border-color: #9ab7e0; outline: none; }
+    .sim-research-grid,
+    .sim-resources-grid {
         display: grid;
         grid-template-columns: 1fr 1fr 1fr;
-        gap: 8px;
+        gap: 1px;
+        background: #415680;
     }
     .sim-research-field {
         display: flex;
         flex-direction: column;
-        gap: 4px;
+        align-items: center;
+        gap: 3px;
+        padding: 4px 6px;
+        background: #344566;
     }
-    .sim-research-field label {
-        font-size: 12px;
-        color: #b1daf2;
-    }
-    .sim-research-field input {
-        width: 100%;
-        background: #0d1b2a;
-        border: 1px solid #415680;
-        color: #E6EBFB;
-        padding: 6px 8px;
-        font-size: 13px;
-        text-align: center;
-        border-radius: 4px;
-    }
+    .sim-research-field label { color: #E6EBFB; font-weight: bold; }
+    .sim-research-field input { width: 100%; text-align: center; }
     .sim-btn {
         display: block;
         width: 100%;
-        padding: 14px;
-        background: linear-gradient(135deg, #415680, #2a3a5c);
-        color: #fff;
-        border: 1px solid #5a7aaa;
-        border-radius: 8px;
-        font-size: 16px;
-        font-weight: bold;
+        padding: 6px;
+        background: #344566;
+        color: #E6EBFB;
+        border: 1px solid #415680;
+        font: bold 12px Tahoma, sans-serif;
         cursor: pointer;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-        transition: background 0.2s;
     }
-    .sim-btn:hover { background: linear-gradient(135deg, #5a7aaa, #415680); }
+    .sim-btn:hover { background: #415680; }
     .sim-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
     /* Results */
-    #simResults { display: none; }
+    #simResults { display: none; margin-top: 4px; }
     .result-banner {
         text-align: center;
-        padding: 20px;
-        border-radius: 8px;
-        margin-bottom: 16px;
-        font-size: 20px;
+        padding: 8px;
+        margin-bottom: 4px;
+        font-size: 14px;
         font-weight: bold;
+        border: 1px solid #415680;
+        background: #344566 url({{ asset('assets/upload/skins/xgproyect/img/bg1.gif') }});
     }
-    .result-banner.attacker-wins { background: #1b3a1b; border: 2px solid #4CAF50; color: #4CAF50; }
-    .result-banner.defender-wins { background: #3a1b1b; border: 2px solid #f44336; color: #f44336; }
-    .result-banner.draw { background: #2a2a1b; border: 2px solid #ff9800; color: #ff9800; }
+    .result-banner.attacker-wins { color: #7CFC00; }
+    .result-banner.defender-wins { color: #ff6b6b; }
+    .result-banner.draw { color: #ffb347; }
     .result-grid {
         display: grid;
         grid-template-columns: 1fr 1fr;
-        gap: 16px;
+        gap: 4px;
     }
     .result-box {
-        background: #1a2a40;
         border: 1px solid #415680;
-        border-radius: 8px;
-        padding: 16px;
+        background: #344566;
+        padding: 0 0 4px;
+        min-width: 0;
     }
     .result-box h4 {
-        color: #b1daf2;
-        font-size: 14px;
-        margin: 0 0 8px;
+        font-size: 11px;
+        margin: 0 0 4px;
+        padding: 4px 6px;
+        border-bottom: 1px solid #415680;
+        background: #344566 url({{ asset('assets/upload/skins/xgproyect/img/bg1.gif') }});
     }
+    .result-box > div { padding: 0 6px; }
     .result-stat {
         display: flex;
         justify-content: space-between;
-        padding: 4px 0;
-        font-size: 13px;
-        border-bottom: 1px solid #0d1b2a;
+        gap: 6px;
+        padding: 3px 0;
+        border-bottom: 1px solid #415680;
     }
     .result-stat:last-child { border-bottom: 0; }
-    .result-stat .label { color: #848484; }
-    .result-stat .value { color: #E6EBFB; font-weight: bold; }
-    .result-stat .value.loss { color: #f44336; }
-    .result-stat .value.win { color: #4CAF50; }
-    .cost-total { margin-top: 12px; padding-top: 8px; border-top: 1px solid #415680; }
-    .cost-total .label { color: #848484; font-size: 13px; }
-    .cost-total .value { color: #E6EBFB; font-weight: bold; font-size: 13px; }
+    .result-stat .label { color: #b1daf2; }
+    .result-stat .value { color: #E6EBFB; font-weight: bold; text-align: right; }
+    .result-stat .value.loss { color: #ff6b6b; }
+    .result-stat .value.win { color: #7CFC00; }
+    .cost-total { margin-top: 6px; padding-top: 4px; border-top: 1px solid #415680; }
+    .cost-total .label { color: #b1daf2; }
+    .cost-total .value { color: #E6EBFB; font-weight: bold; }
     .loot-box {
-        background: #1b2a1b;
-        border: 1px solid #4CAF50;
-        border-radius: 8px;
-        padding: 16px;
-        margin-top: 16px;
+        border: 1px solid #415680;
+        background: #344566;
+        margin-top: 4px;
+        padding: 0 0 4px;
     }
-    .loot-box h4 { color: #4CAF50; margin: 0 0 8px; font-size: 14px; }
-    .sim-resources-grid {
-        display: grid;
-        grid-template-columns: 1fr 1fr 1fr;
-        gap: 8px;
-    }
-    .info-text {
-        color: #5b6a76;
+    .loot-box h4 {
+        color: #7CFC00;
         font-size: 11px;
+        margin: 0 0 4px;
+        padding: 4px 6px;
+        border-bottom: 1px solid #415680;
+        background: #344566 url({{ asset('assets/upload/skins/xgproyect/img/bg1.gif') }});
+    }
+    .loot-box > div { padding: 0 6px; }
+    .info-text {
+        color: #b1daf2;
         font-style: italic;
-        margin: 8px 0;
+        margin: 0;
+        padding: 4px 6px;
     }
     .detail-table {
         width: 100%;
         border-collapse: collapse;
-        font-size: 12px;
-        margin-top: 8px;
+        margin-top: 2px;
     }
     .detail-table th {
         text-align: left;
-        color: #848484;
-        font-weight: normal;
-        padding: 4px 8px;
+        color: #b1daf2;
+        font-weight: bold;
+        padding: 3px 4px;
+        background: transparent;
+        border: 0;
         border-bottom: 1px solid #415680;
-        font-size: 11px;
     }
     .detail-table th.num { text-align: right; }
     .detail-table td {
-        padding: 3px 8px;
-        border-bottom: 1px solid #0d1b2a;
+        padding: 2px 4px;
+        border-bottom: 1px solid #2a3a5c;
         color: #E6EBFB;
     }
     .detail-table td.num { text-align: right; font-weight: bold; }
-    .detail-table td.lost { color: #f44336; }
-    .detail-table td.survived { color: #4CAF50; }
-    .detail-table td.destroyed { color: #f44336; }
-    .detail-table tr:hover { background: rgba(65,86,128,0.15); }
+    .detail-table td.lost,
+    .detail-table td.destroyed { color: #ff6b6b; }
+    .detail-table td.survived { color: #7CFC00; }
     .result-cost {
         font-size: 10px;
-        color: #848484;
+        color: #b1daf2;
         display: block;
         margin-top: 1px;
+    }
+
+    /* Phones: beat mobile.css's big touch-size inputs, one results column */
+    @media (max-width: 768px) {
+        #content .sim-container input[type="number"] {
+            font-size: 14px !important;
+            padding: 4px 6px !important;
+            min-height: 32px;
+        }
+        #content .sim-container .sim-field input[type="number"] { width: 72px; }
+        #content .sim-container .sim-btn {
+            font-size: 14px !important;
+            padding: 10px !important;
+            min-height: 44px;
+        }
+        .sim-field { padding: 3px 4px; gap: 4px; }
+        .sim-field label { font-size: 11px; }
+        .result-grid { grid-template-columns: 1fr; }
     }
 </style>
 
 <div class="sim-container">
+    <div class="sim-title">{{ __('game/menu.lm_battlesimulator') }}</div>
     <form id="simForm" onsubmit="runSimulation(event)">
         <!-- ATTACKER -->
         <div class="sim-section attacker">

@@ -1,4 +1,4 @@
-<table width="665px">
+<table width="665px" class="trader-resources">
     <tr>
         <td class="c">{{ __('game/trader.tr_resource_market') }}</td>
     </tr>

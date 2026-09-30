@@ -21,6 +21,11 @@
     display: none;
 }
 
+/* --- BACK BAR on pop-up pages (hidden on desktop, where they are real pop-up windows) --- */
+.mobile-back {
+    display: none;
+}
+
 /* ============================================
    TABLET AND BELOW (â‰¤768px)
    ============================================ */
@@ -33,6 +38,73 @@
     /* --- LAYOUT: Stack vertically --- */
     #container {
         flex-direction: column;
+        height: auto;
+        min-height: 100vh;
+    }
+
+    /* --- NEVER WIDER THAN THE PHONE (2026-10-01) ---
+       #navbar/#content were width:100% PLUS padding, and formate.css gives body a 1px margin, so
+       every page was ~442px on a 412px phone and the right-hand side was cut off. Anything that
+       still cannot shrink (big tables) now scrolls inside #content instead of dragging the page. */
+    body {
+        margin: 0 !important;
+    }
+
+    #page-content {
+        width: 100%;
+        min-width: 0;
+        align-items: stretch;
+    }
+
+    #navbar,
+    #content {
+        box-sizing: border-box;
+        max-width: 100vw;
+    }
+
+    #content {
+        overflow-x: auto;
+    }
+
+    /* Cells made full-width by the card layouts below add their padding on top of 100% */
+    #content th,
+    #content td {
+        box-sizing: border-box;
+    }
+
+    /* Fixed 519px wrapper divs (technology details) and size="40" text boxes (chat subject)
+       held their column wider than the phone */
+    #content div[style*="width: 519px"] {
+        width: auto !important;
+    }
+
+    #content th > input[type="text"][size],
+    #content th > textarea {
+        width: 100% !important;
+    }
+
+    /* Same for form fields: width 100% + the big touch padding ran off the edge (fleet step 3) */
+    /* :where() = zero weight, so any deliberate max-width (register button 300px...) still wins */
+    :where(#content) :where(input, select, textarea) {
+        box-sizing: border-box;
+        max-width: 100%;
+    }
+
+    /* Resource bar cell: let it shrink to the phone instead of sticking out 3px */
+    #header_top td.header:has(> table#resources) {
+        flex: 1 1 100%;
+        min-width: 0;
+        box-sizing: border-box;
+    }
+
+    /* Desktop pages are built from fixed-width tables (519/530/600/665px...). On a phone they
+       take the full width and wrap instead. :where() keeps this weak so the deliberate
+       exceptions below (fleet movement keeps 519px and scrolls sideways) still win. */
+    :where(#content) table:is([width="519"], [width="519px"], [width="520"], [width="520px"],
+        [width="530"], [width="530px"], [width="569"], [width="582px"], [width="600"], [width="600px"],
+        [width="665px"], [width="668px"], [width="390px"], [width="440"]),
+    :where(#content) table[style*="width: 519px"] {
+        width: 100% !important;
     }
 
     /* --- HAMBURGER BUTTON --- */
@@ -111,9 +183,11 @@
         text-align: center;
     }
 
+    /* Whole row is the tap target (was ~19px tall text only) */
     #leftmenu a {
-        font-size: 14px;
-        padding: 6px 0;
+        display: block;
+        font-size: 15px;
+        padding: 8px 0;
     }
 
     #leftmenu img {
@@ -135,6 +209,25 @@
 
     .menu-overlay.active {
         display: block;
+    }
+
+    /* --- POP-UP PAGES: Back bar instead of an empty menu --- */
+    .mobile-back {
+        display: block;
+        position: sticky;
+        top: 0;
+        z-index: 1001;
+        padding: 12px 16px;
+        background: #1a2a40;
+        border-bottom: 1px solid #415680;
+        color: #E6EBFB;
+        font-size: 15px;
+        font-weight: bold;
+        text-decoration: none;
+    }
+
+    body.popup-page #navbar {
+        display: none;
     }
 
     /* --- TOPNAV: Compact resource bar --- */
@@ -166,6 +259,12 @@
 
     #header_top td.header:first-child {
         flex-shrink: 0;
+        max-width: 100%;
+    }
+
+    /* Long planet names held the selector cell wider than the phone */
+    #header_top select {
+        max-width: calc(100vw - 140px);
     }
 
     /* Resource table */
@@ -339,6 +438,335 @@
     table[width="519"]:has(img[height="200"]) img[height="200"] {
         width: 150px !important;
         height: 150px !important;
+    }
+
+    /* ============================================
+       OVERVIEW (table.overview) — 2026-10-01
+       #content in front beats the older generic 519 rules above.
+       ============================================ */
+    #content table.overview tr {
+        display: flex;
+        flex-wrap: wrap;
+    }
+
+    #content table.overview th,
+    #content table.overview td {
+        box-sizing: border-box;
+    }
+
+    #content table.overview td.c {
+        flex: 0 0 100%;
+    }
+
+    /* Label and value on one line: "Diameter | 12.800 km (212 / 213 Fields)" */
+    #content table.overview > tbody > tr > th[scope="row"] {
+        flex: 0 0 34%;
+        display: flex;
+        align-items: center;
+        text-align: left;
+        font-size: 12px;
+        padding: 8px;
+    }
+
+    #content table.overview > tbody > tr > th[role="cell"] {
+        flex: 1 1 0;
+        min-width: 0;
+        padding: 8px;
+        font-size: 13px;
+    }
+
+    /* Fleet events: one card each - countdown left, arrival time right, text full width */
+    #content table.overview > tbody > tr:is(.flight, .holding, .return) {
+        margin-top: 4px;
+        border: 1px solid #415680;
+    }
+
+    #content table.overview > tbody > tr:is(.flight, .holding, .return) > th[scope="row"] {
+        flex: 0 0 100%;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 6px 8px;
+        border: 0;
+        border-bottom: 1px solid #415680;
+    }
+
+    #content table.overview > tbody > tr:is(.flight, .holding, .return) > th[scope="row"] .z {
+        font-size: 14px;
+    }
+
+    #content table.overview > tbody > tr:is(.flight, .holding, .return) > th[role="cell"] {
+        flex: 0 0 100%;
+        text-align: left;
+        border: 0;
+        line-height: 1.45;
+    }
+
+    /* Recall / ACS buttons: their own strip, and only when there is a button */
+    #content table.overview > tbody > tr:is(.flight, .holding, .return) > th[role="cell"]:last-of-type {
+        text-align: right;
+        padding: 0 8px 8px;
+    }
+
+    #content table.overview > tbody > tr:is(.flight, .holding, .return) > th[role="cell"]:last-of-type:not(:has(a)) {
+        display: none;
+    }
+
+    #content table.overview a.cancel_fleet,
+    #content table.overview a.acs_fleet {
+        display: inline-block;
+        padding: 6px 12px;
+        margin-left: 6px;
+        border: 1px solid #415680;
+        border-radius: 4px;
+        background: #1a2a40;
+    }
+
+    /* Planet block: current planet big on top, moon + other planets as a grid below */
+    #content table.overview th:has(> img[height="200"]) {
+        order: -1;
+        flex: 0 0 100%;
+    }
+
+    #content table.overview tr:has(img[height="200"]) {
+        align-items: stretch;
+    }
+
+    #content table.overview tr:has(img[height="200"]) > th:first-child {
+        flex: 0 0 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+    }
+
+    #content table.overview tr:has(img[height="200"]) > th:first-child br {
+        display: none;
+    }
+
+    #content table.overview th.s {
+        flex: 0 0 100%;
+        padding: 6px;
+    }
+
+    #content table.overview th.s > table.s {
+        width: 100% !important;
+        display: block;
+    }
+
+    #content table.overview th.s > table.s > tbody {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 6px;
+    }
+
+    #content table.overview th.s > table.s tr {
+        display: contents;
+    }
+
+    #content table.overview th.s > table.s th {
+        display: block;
+        padding: 6px 2px;
+        font-size: 11px;
+        line-height: 1.3;
+        overflow-wrap: anywhere;
+        border: 1px solid #415680;
+        border-radius: 4px;
+        background: #1a2a40;
+    }
+
+    #content table.overview th.s > table.s th img {
+        display: block;
+        margin: 4px auto;
+    }
+
+    /* --- GALAXY (2026-10-01): fit the phone instead of scrolling sideways, so the navigation
+       arrows are always on screen. Smaller text, names may wrap, smaller icons. --- */
+    #content table.galaxy-table {
+        display: table !important;
+        width: 100% !important;
+        overflow: visible !important;
+        table-layout: auto;
+    }
+
+    #content table.galaxy-table th,
+    #content table.galaxy-table td[role="columnheader"] {
+        width: auto !important;
+        white-space: normal !important;
+        overflow-wrap: break-word;
+        padding: 3px 2px !important;
+        font-size: 10px !important;
+    }
+
+    #content table.galaxy-table #galaxy_rows th:first-child,
+    #content table.galaxy-table #galaxy_rows th:last-child {
+        white-space: nowrap !important;
+        overflow-wrap: normal;
+    }
+
+    /* long one-word player names ("StellarSentinel") may break rather than push the table wide */
+    #content table.galaxy-table #galaxy_rows th:nth-child(6) {
+        overflow-wrap: anywhere;
+    }
+
+    /* headers wrap between words ("Player / (status)"), never inside one */
+    #content table.galaxy-table td[role="columnheader"] {
+        overflow-wrap: normal;
+    }
+
+    #content table.galaxy-table #galaxy_rows img {
+        max-width: 22px;
+        max-height: 22px;
+    }
+
+    #content table.galaxy-table #galaxy_rows th:nth-child(2) img {
+        max-width: 26px;
+        max-height: 26px;
+    }
+
+    /* Navigation: galaxy row and system row, each "label <- [n] ->", then Go + expedition */
+    #content #galaxy_form > table,
+    #content #galaxy_form > table > tbody {
+        display: block;
+        width: 100% !important;
+    }
+
+    #content #galaxy_form > table > tbody > tr {
+        display: grid;
+        grid-template-columns: auto 44px 1fr 44px;
+        align-items: center;
+        gap: 4px;
+    }
+
+    #content #galaxy_form > table > tbody > tr > td {
+        padding: 0 !important;
+        font-size: 13px;
+    }
+
+    #content #galaxy_form input[type="number"] {
+        width: 100% !important;
+        box-sizing: border-box;
+        text-align: center;
+    }
+
+    #content #galaxy_form input[type="button"],
+    #content #galaxy_form input[type="submit"] {
+        width: 100% !important;
+        min-width: 0 !important;
+        padding: 8px 0 !important;
+        box-sizing: border-box;
+    }
+
+    /* Go and the expedition line each take a full row */
+    #content #galaxy_form > table > tbody > tr > td:nth-child(9),
+    #content #galaxy_form > table > tbody > tr > td:nth-child(10) {
+        grid-column: 1 / -1;
+        width: auto !important;
+        text-align: center !important;
+    }
+
+    #content #galaxy_form #exp_link input {
+        width: auto !important;
+        padding: 8px 16px !important;
+    }
+
+    /* --- TECHNOLOGY TREE: its rows also matched the generic research-card rule (80px image
+       column, 64px icons) which split every name around its picture. Icon + name on one line,
+       requirements beside it. #content beats the generic rules. --- */
+    #content table.techtree > tbody > tr > th.l:first-child {
+        flex: 1 1 42%;
+        width: auto;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        padding: 6px;
+        border: 0;
+        border-right: 1px solid #415680;
+    }
+
+    #content table.techtree > tbody > tr > th.l:last-child {
+        flex: 1 1 58%;
+        width: auto;
+        min-width: 0;
+        padding: 6px;
+        border: 0;
+        text-align: left;
+        font-size: 11px;
+    }
+
+    #content table.techtree th.l img {
+        width: 24px !important;
+        height: 24px !important;
+        vertical-align: middle;
+        margin-right: 4px;
+    }
+
+    #content table.techtree th.l table td {
+        font-size: 12px;
+        padding: 0;
+    }
+
+    /* --- MESSAGES: its wrapper table had no width and sat in a fixed 656px-high box --- */
+    #content > div[style*="height: 656px"] {
+        height: auto !important;
+    }
+
+    #content table.header {
+        width: 100%;
+    }
+
+    /* Messages read best as the plain table (4 columns fit a phone): undo the generic card rows */
+    #content table.tech-detail-table {
+        width: 100%;
+    }
+
+    #content table.tech-detail-table tr,
+    #content table.messages-table tr {
+        display: table-row !important;
+    }
+
+    #content table.tech-detail-table th,
+    #content table.tech-detail-table td,
+    #content table.messages-table th,
+    #content table.messages-table td {
+        display: table-cell !important;
+        flex: none !important;
+        min-width: 0 !important;
+        width: auto;
+        padding: 6px 4px;
+        font-size: 12px;
+    }
+
+    /* tech details: up to 6 number columns (mines), so tighter than messages */
+    #content table.tech-detail-table th,
+    #content table.tech-detail-table td {
+        padding: 3px 2px;
+        font-size: 10px;
+    }
+
+    #content table.messages-table td.b {
+        text-align: left;
+        line-height: 1.4;
+    }
+
+    /* --- RESOURCE MARKET: stack each resource, smaller "10% / 50% / 100%" --- */
+    #content table.trader-resources form[name="refill-resources"] > table > tbody > tr:has(> td > table) {
+        display: flex;
+        flex-wrap: wrap;
+    }
+
+    #content table.trader-resources form[name="refill-resources"] > table > tbody > tr:has(> td > table) > th,
+    #content table.trader-resources form[name="refill-resources"] > table > tbody > tr:has(> td > table) > td {
+        flex: 0 0 100%;
+    }
+
+    #content table.trader-resources span[style*="font-size: 3em"] {
+        font-size: 1.8em !important;
+    }
+
+    #content table.trader-resources input[type="submit"] {
+        padding: 6px 4px !important;
+        white-space: normal;
+        max-width: 100%;
     }
 
     /* --- FLEET SEND: Width only --- */
@@ -692,8 +1120,10 @@
         border-bottom: 1px solid #415680 !important;
     }
 
-    /* Production value cells: 2Ã—2 grid (Metal, Crystal, Deut, Energy) */
-    table.resource-settings > tbody > tr > th[role="cell"]:nth-of-type(-n+4) {
+    /* Production value cells: 2Ã—2 grid (Metal, Crystal, Deut, Energy).
+       nth-of-type counts the th[scope=row] name cell too, so the values are th 2-5 and the
+       dropdown is th 6 (was 1-4 / 5: every label one column off, energy shown as the dropdown) */
+    table.resource-settings > tbody > tr > th[role="cell"]:nth-of-type(n+2):nth-of-type(-n+5) {
         flex: 1 1 0%;
         min-width: 0;
         text-align: center;
@@ -705,14 +1135,14 @@
     }
 
     /* 2Ã—2 grid: first and third cell get right border */
-    table.resource-settings > tbody > tr:has(select) > th[role="cell"]:nth-of-type(1),
-    table.resource-settings > tbody > tr:has(select) > th[role="cell"]:nth-of-type(3) {
+    table.resource-settings > tbody > tr:has(select) > th[role="cell"]:nth-of-type(2),
+    table.resource-settings > tbody > tr:has(select) > th[role="cell"]:nth-of-type(4) {
         border-right: 1px solid #415680;
     }
 
     /* First row of 2Ã—2 gets bottom border */
-    table.resource-settings > tbody > tr:has(select) > th[role="cell"]:nth-of-type(1),
-    table.resource-settings > tbody > tr:has(select) > th[role="cell"]:nth-of-type(2) {
+    table.resource-settings > tbody > tr:has(select) > th[role="cell"]:nth-of-type(2),
+    table.resource-settings > tbody > tr:has(select) > th[role="cell"]:nth-of-type(3) {
         border-bottom: 1px solid #415680;
     }
 
@@ -726,24 +1156,24 @@
         margin-bottom: 2px;
     }
 
-    table.resource-settings > tbody > tr:has(select) > th[role="cell"]:nth-of-type(1)::before {
+    table.resource-settings > tbody > tr:has(select) > th[role="cell"]:nth-of-type(2)::before {
         content: "Metal";
     }
 
-    table.resource-settings > tbody > tr:has(select) > th[role="cell"]:nth-of-type(2)::before {
+    table.resource-settings > tbody > tr:has(select) > th[role="cell"]:nth-of-type(3)::before {
         content: "Crystal";
     }
 
-    table.resource-settings > tbody > tr:has(select) > th[role="cell"]:nth-of-type(3)::before {
+    table.resource-settings > tbody > tr:has(select) > th[role="cell"]:nth-of-type(4)::before {
         content: "Deut";
     }
 
-    table.resource-settings > tbody > tr:has(select) > th[role="cell"]:nth-of-type(4)::before {
+    table.resource-settings > tbody > tr:has(select) > th[role="cell"]:nth-of-type(5)::before {
         content: "Energy";
     }
 
     /* Dropdown cell: full width below the grid */
-    table.resource-settings > tbody > tr > th[role="cell"]:nth-of-type(5) {
+    table.resource-settings > tbody > tr > th[role="cell"]:nth-of-type(6) {
         flex: 0 0 100%;
         padding: 8px 10px;
         border: 0 !important;
@@ -781,6 +1211,14 @@
         padding: 4px 2px;
         border: 0;
         font-size: 12px;
+    }
+
+    /* Recalculate row: one full-width cell */
+    table.resource-settings > tbody > tr > th[colspan="6"] {
+        flex: 0 0 100%;
+        text-align: center;
+        border: 0 !important;
+        background: transparent !important;
     }
 
     /* Submit button row */
@@ -823,7 +1261,14 @@
         font-size: 11px !important;
         padding: 4px 2px !important;
     }
+    /* home page: header was 100% + padding and the trailer video 425px - both wider than a phone */
+    video {
+        max-width: 100%;
+        height: auto;
+    }
+
     #header {
+        box-sizing: border-box;
         width: 100% !important;
         padding: 16px 8px 0 !important;
         height: auto !important;
@@ -926,6 +1371,8 @@
     }
 
     #regSubmit {
+        display: block;
+        margin: 0 auto;
         width: 100% !important;
         max-width: 300px;
     }
@@ -943,7 +1390,9 @@
         width: 100% !important;
     }
 
-    #menu {
+    /* Home page menu only: a bare #menu here also hit the game's slide-out drawer (killed its
+       full height and background) */
+    #contentWrap #menu {
         height: auto !important;
         background: none !important;
     }

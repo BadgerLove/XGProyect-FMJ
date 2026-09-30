@@ -132,7 +132,8 @@ class AllianceController extends BaseController
             return $this->user['ally_request'];
         }
 
-        return $alliance_id;
+        // filter_input gives false for an empty/invalid allyid (TypeError -> 500 before 2026-10-01)
+        return is_int($alliance_id) ? $alliance_id : null;
     }
 
     private function getCurrentSection(): string
@@ -224,6 +225,11 @@ class AllianceController extends BaseController
 
     private function getAinfoSection(): void
     {
+        // unknown / deleted alliance id: back to the alliance page instead of a 500
+        if ($this->alliance->getAlliances() === []) {
+            Functions::redirect('game.php?page=alliance');
+        }
+
         Template::legacyView(
             'alliance.ainfo',
             [

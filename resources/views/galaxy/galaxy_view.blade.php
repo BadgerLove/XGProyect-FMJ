@@ -282,7 +282,7 @@
     document.onkeydown = cursorevent;
 </script>
 {!! $mip !!}
-<table width="656px">
+<table width="656px" class="galaxy-table">
     <tr>
         <td class="c" colspan="8">
             <form action="game.php?page=galaxy&mode=1" method="post" id="galaxy_form" style="margin:0" role="form">

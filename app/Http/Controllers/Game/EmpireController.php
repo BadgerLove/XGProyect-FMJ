@@ -337,7 +337,7 @@ class EmpireController extends BaseController
             $object instanceof Building => $this->developmentsService->setBuildingPage($object->getId()),
             $object instanceof ResearchObject => 'research',
             $object instanceof Ship => 'shipyard',
-            $object instanceof Defense => 'defense',
+            $object instanceof Defense => 'defenses',
             default => throw new RuntimeException('Unknown object type for: ' . $object->getName()),
         };
 

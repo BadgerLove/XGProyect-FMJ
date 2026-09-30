@@ -82,6 +82,9 @@ class Leftmenu extends Component
             return !isset($modules[$idx]) || $modules[$idx] === '1' || $modules[$idx] === '';
         });
 
+        // no forum configured (forum_url empty): drop "Board" rather than a link that reloads the page
+        $pages = array_filter($pages, fn ($page) => $page[0] !== '');
+
         // build the menu array
         foreach ($pages as $page) {
             $menu[$page[5]][] = [
@@ -93,6 +96,9 @@ class Leftmenu extends Component
                 ),
             ];
         }
+
+        // a block whose links were all removed would leave its header image with nothing under it
+        $blocks = array_intersect_key($blocks, $menu);
 
         $langCode = $this->settingsService->getString('lang');
         $latestVersion = Changelog::query()

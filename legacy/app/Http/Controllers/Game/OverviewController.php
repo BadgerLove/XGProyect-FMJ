@@ -433,7 +433,7 @@ class OverviewController extends BaseController
             $userRank = __('game/overview.ov_place', [
                 'points' => $this->formatService->prettyNumber((int) $this->user['user_statistic_total_points']),
                 'url' => $this->formatService->link(
-                    'game.php?page=statistics&range=' . $totalRank,
+                    'game.php?page=highscore&range=' . $totalRank,
                     (string) $totalRank,
                     (string) $totalRank
                 ),

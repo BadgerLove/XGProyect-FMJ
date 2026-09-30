@@ -1,4 +1,4 @@
-<table border="1" style="margin: 0 auto;">
+<table border="1" class="tech-detail-table" style="margin: 0 auto;">
     <tbody>
         <tr>
             @foreach ($detailTable['headers'] as $header)

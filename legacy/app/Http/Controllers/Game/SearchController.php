@@ -229,7 +229,7 @@ class SearchController extends BaseController
     {
         if ($this->noob->isRankVisible($userLevel)) {
             return app(FormatService::class)->link(
-                'game.php?page=statistics&start=' . $userRank,
+                'game.php?page=highscore&range=' . $userRank,
                 $this->formatService->prettyNumber((int) $userRank)
             );
         } else {

@@ -47,7 +47,7 @@
             <th width="75px">{{ __('game/global.metal') }}</th>
             @foreach ($metalRow as $item)
             <th width="75px">
-                <a href="game.php?page=resources&cp={{ $item['planetId'] }}&re=0&planettype={{ $item['planetType'] }}">{{ $item['planetCurrentAmount'] }}</a> / {{ $item['planetProduction'] }}
+                <a href="game.php?page=resourcesettings&cp={{ $item['planetId'] }}&re=0&planettype={{ $item['planetType'] }}">{{ $item['planetCurrentAmount'] }}</a> / {{ $item['planetProduction'] }}
             </th>
             @endforeach
         </tr>
@@ -55,7 +55,7 @@
             <th width="75px">{{ __('game/global.crystal') }}</th>
             @foreach ($crystalRow as $item)
             <th width="75px">
-                <a href="game.php?page=resources&cp={{ $item['planetId'] }}&re=0&planettype={{ $item['planetType'] }}">{{ $item['planetCurrentAmount'] }}</a> / {{ $item['planetProduction'] }}
+                <a href="game.php?page=resourcesettings&cp={{ $item['planetId'] }}&re=0&planettype={{ $item['planetType'] }}">{{ $item['planetCurrentAmount'] }}</a> / {{ $item['planetProduction'] }}
             </th>
             @endforeach
         </tr>
@@ -63,7 +63,7 @@
             <th width="75px">{{ __('game/global.deuterium') }}</th>
             @foreach ($deuteriumRow as $item)
             <th width="75px">
-                <a href="game.php?page=resources&cp={{ $item['planetId'] }}&re=0&planettype={{ $item['planetType'] }}">{{ $item['planetCurrentAmount'] }}</a> / {{ $item['planetProduction'] }}
+                <a href="game.php?page=resourcesettings&cp={{ $item['planetId'] }}&re=0&planettype={{ $item['planetType'] }}">{{ $item['planetCurrentAmount'] }}</a> / {{ $item['planetProduction'] }}
             </th>
             @endforeach
         </tr>

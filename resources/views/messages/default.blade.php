@@ -8,12 +8,12 @@
     }
 </script>
 <form action="game.php?page=messages" method="post" role="form">
-    <table width="519">
+    <table width="519" class="messages-table">
         <table>
             <tr>
                 <td>
                     <input name="messages" value="1" type="hidden">
-                    <table width="519">
+                    <table width="519" class="messages-table">
                         <tr>
                             <td class="c" colspan="4">{{ __('game/messages.mg_title') }}</td></tr><tr>
                             <th>{{ __('game/messages.mg_action') }}</th>
