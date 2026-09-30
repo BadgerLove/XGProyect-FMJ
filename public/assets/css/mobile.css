@@ -603,9 +603,16 @@
         overflow-wrap: normal;
     }
 
-    /* long one-word player names ("StellarSentinel") may break rather than push the table wide */
+    /* long one-word player names ("StellarSentinel") may break rather than push the table wide;
+       the min-width stops ordinary names ("GhostViper") being split too (checked on 45 systems) */
     #content table.galaxy-table #galaxy_rows th:nth-child(6) {
         overflow-wrap: anywhere;
+        min-width: 66px;
+    }
+
+    #content table.galaxy-table td[role="columnheader"] {
+        font-size: 9px !important;
+        padding: 3px 1px !important;
     }
 
     /* headers wrap between words ("Player / (status)"), never inside one */
