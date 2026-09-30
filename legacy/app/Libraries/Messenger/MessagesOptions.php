@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Xgp\App\Libraries\Messenger;
 
 use Xgp\App\Core\Enumerators\MessagesEnumerator;
-use Xgp\App\Helpers\StringsHelper;
 
 final class MessagesOptions
 {
@@ -101,7 +100,9 @@ final class MessagesOptions
         if ($this->_message_format == MessagesFormat::HTML) {
             $this->_message_text = stripslashes($message_text);
         } else {
-            $this->_message_text = StringsHelper::escapeString($message_text);
+            // Messenger binds this as a query parameter, so SQL-escaping here stored literal
+            // backslashes (href=\"game.php...\" broke every coordinate link) - 2026-09-30
+            $this->_message_text = $message_text;
         }
     }
 
