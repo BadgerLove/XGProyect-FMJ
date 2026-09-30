@@ -11,6 +11,7 @@ use Xgp\App\Core\Concerns\PreparesLegacySql;
 use Xgp\App\Core\Enumerators\MissionsEnumerator as Missions;
 use Xgp\App\Core\Objects;
 use Xgp\App\Libraries\FleetsLib;
+use Xgp\App\Libraries\Functions;
 
 /**
  * Dispatches fleets directly to the database for bot accounts.
@@ -379,10 +380,20 @@ class FleetDispatcher
         }
         $this->deductFuel($botPlanet['planet_id'], $fuel);
 
-        // Colony ship carries some resources to bootstrap the new planet
-        $metal = min((int) ($botPlanet['planet_metal'] ?? 0), 5000);
-        $crystal = min((int) ($botPlanet['planet_crystal'] ?? 0), 5000);
-        $deutRemaining = min(max(0, (int) ($botPlanet['planet_deuterium'] ?? 0) - $fuel), 3000);
+        // Starter kit for the new colony: up to 60 % of what the planet holds, in a 2:1:0.5 mix,
+        // clamped to the hold (colony ship 7500 + any escort cargo). Until 30 Sep a flat
+        // 5K/5K/3K that ignored the hold.
+        $metal = (int) (0.6 * (float) ($botPlanet['planet_metal'] ?? 0));
+        $crystal = (int) (0.6 * (float) ($botPlanet['planet_crystal'] ?? 0));
+        $deutRemaining = (int) (0.6 * max(0, (float) ($botPlanet['planet_deuterium'] ?? 0) - $fuel));
+        $hold = $this->cargoCapacity($ships, $botUser);
+        [$metal, $crystal, $deutRemaining] = $this->clampToCapacity(
+            $ships,
+            $botUser,
+            min($metal, (int) ($hold * 0.57)),
+            min($crystal, (int) ($hold * 0.29)),
+            min($deutRemaining, (int) ($hold * 0.14))
+        );
 
         $this->deductResources($botPlanet['planet_id'], $metal, $crystal, $deutRemaining);
 
@@ -401,7 +412,8 @@ class FleetDispatcher
             'fleet_start_system'    => $botPlanet['planet_system'],
             'fleet_start_planet'    => $botPlanet['planet_planet'],
             'fleet_start_type'      => $this->originType($botPlanet),
-            'fleet_end_time'        => $arrivalTime,
+            // A refused colony ship (slot taken meanwhile) flies home; was = arrival (instant return)
+            'fleet_end_time'        => $arrivalTime + $flightDuration,
             'fleet_end_stay'        => 0,
             'fleet_end_galaxy'      => $target['galaxy'],
             'fleet_end_system'      => $target['system'],
@@ -851,10 +863,13 @@ class FleetDispatcher
 
         $speeds = FleetsLib::fleetMaxSpeed($ships, $user);
         $maxSpeed = min($speeds);
-        $speedFactor = app(\App\Services\SettingsService::class)->getInt('game_speed') / 2500;
-        $duration = FleetsLib::missionDuration(10, $maxSpeed, $distance, (int) $speedFactor);
+        // Same arguments as the game's own fleet pages (Fleet3Controller): the speed factor is
+        // fleet_speed / 2500, for the duration AND the consumption. Until 30 Sep a hard-coded 10
+        // went into fleetConsumption (bots paid ~55 % of the real fuel on live).
+        $speedFactor = Functions::fleetSpeedFactor();
+        $duration = FleetsLib::missionDuration(10, $maxSpeed, $distance, $speedFactor);
 
-        return (int) FleetsLib::fleetConsumption($ships, 10, (int) $duration, $distance, $user);
+        return (int) FleetsLib::fleetConsumption($ships, $speedFactor, (int) $duration, $distance, $user);
     }
 
     /**
@@ -875,9 +890,8 @@ class FleetDispatcher
 
         $speeds = FleetsLib::fleetMaxSpeed($ships, $user);
         $maxSpeed = min($speeds);
-        $speedFactor = app(\App\Services\SettingsService::class)->getInt('game_speed') / 2500;
 
-        return (int) FleetsLib::missionDuration(10, $maxSpeed, $distance, (int) $speedFactor);
+        return (int) FleetsLib::missionDuration(10, $maxSpeed, $distance, Functions::fleetSpeedFactor());
     }
 
     /**

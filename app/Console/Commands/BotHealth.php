@@ -41,6 +41,21 @@ class BotHealth extends Command
     /** Rule 4: planets that have exhausted the escalation ladder before a human is asked to look. */
     private const STUCK_PLANETS = 50;
 
+    /** Build trend: the last day's buildings below this share of the previous days' average. */
+    private const BUILD_TREND_SHARE = 0.5;
+
+    /** Build trend only counts when the previous days averaged at least this many a day. */
+    private const BUILD_TREND_MIN_DAILY = 20;
+
+    /** Ticks per day (every 15 min). */
+    private const TICKS_PER_DAY = 96;
+
+    /** Fields capped: more than this share of bot planets full while no bot has a Terraformer. */
+    private const FIELDS_FULL_SHARE = 0.5;
+
+    /** Idle share: planets idle / bots processed averaged over a day above this. */
+    private const IDLE_SHARE = 0.8;
+
     /** Rule 5: ticks to look back for spy activity (96 × 15 min = 24 h). */
     private const SPY_LOOKBACK_TICKS = 96;
 
@@ -129,7 +144,9 @@ class BotHealth extends Command
             $window = array_slice($lines, -self::IDLE_TICKS);
             $allIdle = true;
             foreach ($window as $l) {
-                $actions = (int) $l['built'] + (int) $l['ships'] + (int) $l['research'];
+                // Ships don't count: satellites/fighters get queued every tick even when the economy
+                // is frozen, which hid the Aug-Sep 2026 stall from this rule for weeks.
+                $actions = (int) $l['built'] + (int) $l['research'];
                 if ((int) $l['processed'] === 0 || $actions > 0) {
                     $allIdle = false;
                     break;
@@ -137,13 +154,37 @@ class BotHealth extends Command
             }
             if ($allIdle) {
                 $hours = round(self::IDLE_TICKS * 15 / 60, 1);
-                return $this->verdict('brain-idle', "brain idle — 0 buildings/ships/research for the last " . self::IDLE_TICKS . " ticks (~{$hours} h)", array_merge($recent, $detail));
+                return $this->verdict('brain-idle', "brain idle — 0 buildings/research for the last " . self::IDLE_TICKS . " ticks (~{$hours} h)", array_merge($recent, $detail));
             }
         }
 
-        // Rule 4 — escalation ladder exhausted on many planets
-        if ((int) $last['stuck'] >= self::STUCK_PLANETS) {
-            return $this->verdict('ladder-stuck', "{$last['stuck']} planets have exhausted the escalation ladder", array_merge($recent, $detail));
+        // Rule 4 (ladder-stuck) removed 30 Sep: BotTick never set `stuck`, so it could not fire.
+
+        // Rule 6 — build trend: the last day built less than half of what the days before averaged.
+        // The Sep 2026 stall went 238 -> 35 a day with every other rule green.
+        if (count($lines) >= self::TICKS_PER_DAY * 3) {
+            $lastDay = array_slice($lines, -self::TICKS_PER_DAY);
+            $before = array_slice($lines, 0, -self::TICKS_PER_DAY);
+            $builtLastDay = array_sum(array_map(fn ($l) => (int) $l['built'], $lastDay));
+            $avgBefore = array_sum(array_map(fn ($l) => (int) $l['built'], $before)) / (count($before) / self::TICKS_PER_DAY);
+            if ($avgBefore >= self::BUILD_TREND_MIN_DAILY && $builtLastDay < $avgBefore * self::BUILD_TREND_SHARE) {
+                return $this->verdict('build-trend', sprintf('buildings falling — %d in the last 24 h vs %.0f a day before', $builtLastDay, $avgBefore), array_merge($recent, $detail));
+            }
+        }
+
+        // Rule 7 — fields capped: most bot planets full and nobody has a Terraformer (no way out)
+        if ($db['planets'] > 0 && $db['fields_full'] > $db['planets'] * self::FIELDS_FULL_SHARE && $db['terraformers'] === 0) {
+            return $this->verdict('fields-capped', "{$db['fields_full']} of {$db['planets']} bot planets have no free fields and no bot has a Terraformer", array_merge($recent, $detail));
+        }
+
+        // Rule 8 — idle share: most planets idle (nothing building, nothing researching) for a day
+        if (count($lines) >= self::TICKS_PER_DAY) {
+            $day = array_slice($lines, -self::TICKS_PER_DAY);
+            $processed = array_sum(array_map(fn ($l) => (int) $l['processed'], $day));
+            $idle = array_sum(array_map(fn ($l) => (int) ($l['idle_planets'] ?? 0), $day));
+            if ($processed > 0 && $idle / $processed > self::IDLE_SHARE) {
+                return $this->verdict('idle-share', sprintf('%.0f%% of planets idle over the last 24 h', 100 * $idle / $processed), array_merge($recent, $detail));
+            }
         }
 
         // Rule 5 — probes exist, intel empty, nobody has spied for a day
@@ -200,8 +241,8 @@ class BotHealth extends Command
             }
         }
 
-        // Keep a bounded tail — rule 5 needs at most SPY_LOOKBACK_TICKS.
-        return array_slice($parsed, -max(self::SPY_LOOKBACK_TICKS, self::IDLE_TICKS));
+        // Keep a bounded tail — rule 6 compares the last day with the week before it.
+        return array_slice($parsed, -max(self::SPY_LOOKBACK_TICKS, self::IDLE_TICKS, self::TICKS_PER_DAY * 8));
     }
 
     /**
@@ -243,14 +284,17 @@ class BotHealth extends Command
                   (SELECT COUNT(DISTINCT q.planet_id) FROM `{$prefix}building_queues` q JOIN `{$prefix}planets` p ON p.planet_id=q.planet_id JOIN `{$prefix}users` u ON u.id=p.planet_user_id WHERE u.bot_profile IS NOT NULL AND q.end_time > UNIX_TIMESTAMP()) AS planets_building_live,
                   (SELECT COUNT(*) FROM `{$prefix}planets` p JOIN `{$prefix}users` u ON u.id=p.planet_user_id WHERE u.bot_profile IS NOT NULL AND p.planet_b_hangar_id<>'' AND p.planet_b_hangar_id IS NOT NULL) AS planets_hangar_busy,
                   (SELECT COUNT(*) FROM `{$prefix}planets` p JOIN `{$prefix}users` u ON u.id=p.planet_user_id WHERE u.bot_profile IS NOT NULL AND p.planet_type=1 AND p.planet_energy_max + p.planet_energy_used < 0) AS planets_in_deficit,
-                  (SELECT COUNT(*) FROM `{$prefix}fleets` f JOIN `{$prefix}users` u ON u.id=f.fleet_owner WHERE u.bot_profile IS NOT NULL) AS bot_fleets_out
+                  (SELECT COUNT(*) FROM `{$prefix}fleets` f JOIN `{$prefix}users` u ON u.id=f.fleet_owner WHERE u.bot_profile IS NOT NULL) AS bot_fleets_out,
+                  (SELECT COUNT(*) FROM `{$prefix}planets` p JOIN `{$prefix}users` u ON u.id=p.planet_user_id WHERE u.bot_profile IS NOT NULL AND p.planet_type=1 AND p.planet_destroyed=0) AS planets,
+                  (SELECT COUNT(*) FROM `{$prefix}planets` p JOIN `{$prefix}users` u ON u.id=p.planet_user_id JOIN `{$prefix}buildings` b ON b.building_planet_id=p.planet_id WHERE u.bot_profile IS NOT NULL AND p.planet_type=1 AND p.planet_destroyed=0 AND p.planet_field_current >= p.planet_field_max + 5 * b.building_terraformer) AS fields_full,
+                  (SELECT COUNT(*) FROM `{$prefix}buildings` b JOIN `{$prefix}planets` p ON p.planet_id=b.building_planet_id JOIN `{$prefix}users` u ON u.id=p.planet_user_id WHERE u.bot_profile IS NOT NULL AND b.building_terraformer > 0) AS terraformers
             ");
 
             return array_map('intval', (array) $row);
         } catch (\Throwable $e) {
             $this->warn('DB check failed: ' . $e->getMessage());
 
-            return ['intel_rows' => -1, 'combats_24h' => -1, 'probes' => -1, 'planets_building_live' => -1, 'planets_hangar_busy' => -1, 'planets_in_deficit' => -1, 'bot_fleets_out' => -1];
+            return ['intel_rows' => -1, 'combats_24h' => -1, 'probes' => -1, 'planets_building_live' => -1, 'planets_hangar_busy' => -1, 'planets_in_deficit' => -1, 'bot_fleets_out' => -1, 'planets' => 0, 'fields_full' => 0, 'terraformers' => -1];
         }
     }
 
@@ -261,8 +305,8 @@ class BotHealth extends Command
     private function describeDb(array $db): array
     {
         return [sprintf(
-            'db: planets_building=%d hangar_busy=%d energy_deficit=%d fleets_out=%d probes=%d intel=%d combats_24h=%d',
-            $db['planets_building_live'], $db['planets_hangar_busy'], $db['planets_in_deficit'], $db['bot_fleets_out'], $db['probes'], $db['intel_rows'], $db['combats_24h']
+            'db: planets_building=%d hangar_busy=%d energy_deficit=%d fleets_out=%d probes=%d intel=%d combats_24h=%d fields_full=%d/%d terraformers=%d',
+            $db['planets_building_live'], $db['planets_hangar_busy'], $db['planets_in_deficit'], $db['bot_fleets_out'], $db['probes'], $db['intel_rows'], $db['combats_24h'], $db['fields_full'], $db['planets'], $db['terraformers']
         )];
     }
 

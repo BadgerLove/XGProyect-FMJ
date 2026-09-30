@@ -368,9 +368,9 @@ class ROICalculator
 
                 return ($metalProd * $metalBonus + $crystalProd * $crystalBonus + $deutProd * $deutBonus) * 24;
 
-            case 113: // Energy Tech: enables higher mine levels (energy gating)
-                // Hard to quantify — return energy increase proxy
-                return 100 * 24; // Placeholder: energy tech is always useful
+            // 113 Energy Tech falls through to the strategic table (0.3 / 1.5 / 4.0). Until 30 Sep a
+            // "100 * 24" placeholder here made it the worst research in the game (~256 days at
+            // Energy 9), so no bot ever reached Energy 12 and the Terraformer.
 
             default:
                 return 0;

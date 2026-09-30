@@ -191,7 +191,7 @@ class BotTick extends Command
 
         $this->info("Processing {$bots->count()} bots..." . ($dryRun ? ' (DRY RUN)' : ''));
 
-        $stats = ['processed' => 0, 'built' => 0, 'ships' => 0, 'researches' => 0, 'attacks' => 0, 'spies' => 0, 'fleet_saves' => 0, 'expeditions' => 0, 'harvests' => 0, 'skipped' => 0, 'errors' => 0, 'idle_planets' => 0, 'escalated' => 0, 'stuck' => 0, 'reserved' => 0, 'moon_returns' => 0];
+        $stats = ['processed' => 0, 'built' => 0, 'ships' => 0, 'researches' => 0, 'attacks' => 0, 'spies' => 0, 'fleet_saves' => 0, 'expeditions' => 0, 'harvests' => 0, 'skipped' => 0, 'errors' => 0, 'idle_planets' => 0, 'escalated' => 0, 'stuck' => 0, 'reserved' => 0, 'moon_returns' => 0, 'build_rejected' => 0, 'colonise' => 0, 'feeds' => 0];
 
         if ($this->ladder->isEnabled()) {
             $assume = (int) $this->option('ladder-assume-idle');
@@ -236,6 +236,9 @@ class BotTick extends Command
                 $stats['stuck'] += $result['stuck'];
                 $stats['reserved'] += $result['reserved'];
                 $stats['moon_returns'] += $result['moon_returns'];
+                $stats['build_rejected'] += $result['build_rejected'];
+                $stats['colonise'] += $result['colonise'];
+                $stats['feeds'] += $result['feeds'];
 
                 if ($result['built']) {
                     $stats['built']++;
@@ -272,6 +275,7 @@ class BotTick extends Command
             } catch (\Throwable $e) {
                 $stats['errors']++;
                 $this->warn("  [{$bot->id}] {$bot->name}: ERROR - {$e->getMessage()}");
+                $this->logBotError($bot, $e, $dryRun);
             }
         }
 
@@ -345,11 +349,11 @@ class BotTick extends Command
     {
         try {
             $line = sprintf(
-                "%s | %sprocessed=%d skipped=%d built=%d ships=%d research=%d attacks=%d spies=%d shared=%d saves=%d expeditions=%d harvests=%d moon_returns=%d errors=%d | idle_planets=%d escalated=%d stuck=%d reserved=%d | %.1fs\n",
+                "%s | %sprocessed=%d skipped=%d built=%d ships=%d research=%d attacks=%d spies=%d shared=%d saves=%d expeditions=%d harvests=%d moon_returns=%d colonise=%d feeds=%d build_rejected=%d errors=%d | idle_planets=%d escalated=%d stuck=%d reserved=%d | %.1fs\n",
                 date('Y-m-d H:i:s'),
                 $dryRun ? 'DRY ' : '',
                 $stats['processed'], $stats['skipped'], $stats['built'], $stats['ships'], $stats['researches'],
-                $stats['attacks'], $stats['spies'], $this->sharedIntelHits, $stats['fleet_saves'], $stats['expeditions'], $stats['harvests'] ?? 0, $stats['moon_returns'] ?? 0, $stats['errors'],
+                $stats['attacks'], $stats['spies'], $this->sharedIntelHits, $stats['fleet_saves'], $stats['expeditions'], $stats['harvests'] ?? 0, $stats['moon_returns'] ?? 0, $stats['colonise'] ?? 0, $stats['feeds'] ?? 0, $stats['build_rejected'] ?? 0, $stats['errors'],
                 $stats['idle_planets'] ?? 0, $stats['escalated'] ?? 0, $stats['stuck'] ?? 0, $stats['reserved'] ?? 0,
                 $elapsed
             );
@@ -371,6 +375,7 @@ class BotTick extends Command
             'building' => null, 'ship' => null, 'research' => null,
             'attack_target' => null, 'spy_target' => null,
             'idle_planets' => 0, 'escalated' => 0, 'stuck' => 0, 'reserved' => 0, 'moon_returns' => 0,
+            'build_rejected' => 0, 'colonise' => 0, 'feeds' => 0,
         ];
 
         // Load ALL planets for this bot (not just first)
@@ -390,6 +395,10 @@ class BotTick extends Command
         if (empty($planetRows)) {
             return $result;
         }
+
+        // Finish research that is done BEFORE anything is decided (was after the planet loop: every
+        // finished research cost a tick and the lab looked busy on stale data)
+        $this->researchQueueService->processCompletions($bot);
 
         // Load user data once (shared across all planets)
         $userRow = DB::selectOne(
@@ -418,6 +427,10 @@ class BotTick extends Command
         $personality = $profile['personality'] ?? 'raider';
 
         $researchQueued = false;
+
+        // --- Account plan (Phase 2): research planet, colony yard, colony need ---
+        $account = $this->accountPlan($bot, $user, $planetRows);
+        $labNeeded = 0;
 
         // --- PER-PLANET LOOP ---
         foreach ($planetRows as $planetRow) {
@@ -473,11 +486,76 @@ class BotTick extends Command
                 $this->syncPlanetFromModel($planet, $planetModel);
             }
 
+            $planetId = (int) $planet['planet_id'];
+            $isMoonRow = ((int) ($planet['planet_type'] ?? 1)) === 3;
+            $isResearchPlanet = $planetId === $account['research_planet_id'];
+            $isColonyYard = $planetId === $account['colony_yard_id'];
+
+            // --- Phase 2.5: Research (research planet only) — decided BEFORE building and ships ---
+            // Until 30 Sep research came last, from whatever the shipyard left, and only if it could be
+            // paid on the spot: research fell from 1,400 to ~100 a day while fighters ate the crystal.
+            $researchId = null;
+            $researchPlan = null;
+            if ($isResearchPlanet && !$researchQueued && $planetModel) {
+                $researchPlan = $this->brain->researchPlan($user, $planet);
+                $labNeeded = $this->brain->lastLabNeeded;
+
+                if ($researchPlan !== null && $researchPlan['affordable']) {
+                    $researchId = $researchPlan['id'];
+                    if (!$dryRun) {
+                        $technocrateActive = (int) ($user['premium_officier_technocrat'] ?? 0) > time();
+                        if ($this->researchQueueService->add($bot, $planetModel, $user, $researchId, $technocrateActive)) {
+                            $result['research'] = 'research queued';
+                            $user['research_current_research'] = $planetId;
+                            $planetModel->refresh();
+                            $this->syncPlanetFromModel($planet, $planetModel);
+                        }
+                    } else {
+                        $result['research'] = 'research queued';
+                    }
+                }
+                $researchQueued = true;
+            }
+
             // --- Phase 3: Queue next building (reuse cached model) ---
+            $buildCtx = [
+                'research_planet' => $isResearchPlanet,
+                'lab_needed' => $isResearchPlanet ? $labNeeded : 0,
+                'colony_push' => $account['colony_push'],
+                'colony_yard' => $isColonyYard,
+            ];
+            if ($researchPlan !== null && !$researchPlan['affordable']) {
+                foreach (['metal', 'crystal', 'deuterium'] as $res) {
+                    $buildCtx["need_{$res}"] = $researchPlan['cost'][$res];
+                }
+            }
+            if ($isColonyYard && $account['need_colony_ship']) {
+                foreach ($this->brain->price(208) as $res => $amount) {
+                    $buildCtx["need_{$res}"] = max((float) ($buildCtx["need_{$res}"] ?? 0), $amount);
+                }
+            }
+
             $buildingId = null;
             $buildingQueueEmpty = $planetModel && $planetModel->buildingQueue()->count() === 0;
             if ($buildingQueueEmpty) {
-                $buildingId = $this->brain->nextBuilding($planet, $user);
+                $buildingId = $this->brain->nextBuilding($planet, $user, $buildCtx);
+
+                // Full planet whose way out (Terraformer / Nanite) is allowed now: tear one level down
+                if ($buildingId === null && $planetModel) {
+                    $demolish = $this->brain->nextDemolition($planet, $user, $buildCtx);
+                    if ($demolish !== null) {
+                        $what = $this->getBuildingName($demolish);
+                        $where = "{$planet['planet_galaxy']}:{$planet['planet_system']}:{$planet['planet_planet']}";
+                        if ($dryRun) {
+                            $this->line("  [{$bot->id}] {$bot->name}: would demolish a level of {$what} on {$where} (room for the terraformer)");
+                        } elseif ($this->queueService->add($planetModel, $user, $demolish, 'destroy')) {
+                            $this->line("  [{$bot->id}] {$bot->name}: demolishing a level of {$what} on {$where} (room for the terraformer)");
+                            $result['built'] = true;
+                            $result['building'] = "demolish {$what}";
+                            $buildingQueueEmpty = false;
+                        }
+                    }
+                }
 
                 if ($buildingId !== null && !$dryRun) {
                     $success = $this->queueService->add($planetModel, $user, $buildingId, 'build');
@@ -485,6 +563,13 @@ class BotTick extends Command
                     if ($success) {
                         $result['built'] = true;
                         $result['building'] = $this->getBuildingName($buildingId);
+                    } else {
+                        // The game refused it (the brain checks fields + requirements, so this should
+                        // be rare). Count it; the reserve below still saves for it.
+                        $result['build_rejected']++;
+                        $this->line("  [{$bot->id}] {$bot->name}: game refused {$this->getBuildingName($buildingId)} on "
+                            . "{$planet['planet_galaxy']}:{$planet['planet_system']}:{$planet['planet_planet']} ({$this->brain->lastBuildingReason})");
+                        $buildingId = null;
                     }
                 } elseif ($buildingId !== null) {
                     $result['built'] = true;
@@ -498,79 +583,75 @@ class BotTick extends Command
                 $this->syncPlanetFromModel($planet, $planetModel);
             }
 
-            // --- Phase 4: Queue ship/defense production ---
-            // Energy handling lives in BotBrain::nextShip(): when the planet is in deficit it
-            // returns Solar Satellites first (cheap crystal/deut, no metal). The old blanket
-            // "skip all ships while energy is negative" gate (Aug 9) is gone — combined with the
-            // inverted isEnergyNegative() sign it silenced ship production on every planet.
-            //
-            // Building reserve (6 Sep): if the building phase wanted something it could not
-            // afford, the shipyard may only spend what is left above that building's cost.
-            // Otherwise cruisers/fighters ate every spare crystal each tick and the 250-460K
-            // crystal buildings were never reached (140-190 idle planets overnight). Capped at
-            // two days of the planet's own production so an out-of-reach building (Nanites)
-            // cannot freeze the hangar for a week; the merchant ladder does the rest.
-            $reserve = [];
-            if ($buildingQueueEmpty && $buildingId === null && ((int) ($planet['planet_type'] ?? 1)) !== 3) {
-                $wanted = $this->brain->wantedBuildingCost($planet, $user);
+            // --- Phase 4: Shipyard, above the reserve ---
+            // Reserve = what this planet is saving for: the building the brain wants (capped at two
+            // days of the planet's own production), the research on the research planet (capped at a
+            // day), and the colony ship on the colony yard. Floors (satellites, colony ship, probes)
+            // ignore it; recyclers, cargo and combat only spend what is above it.
+            $reserve = ['metal' => 0.0, 'crystal' => 0.0, 'deuterium' => 0.0];
+            $saving = false;
+            if ($buildingQueueEmpty && $buildingId === null && !$isMoonRow) {
+                $wanted = $this->brain->wantedBuildingCost($planet, $user, $buildCtx);
                 if ($wanted !== null) {
                     foreach (['metal', 'crystal', 'deuterium'] as $res) {
                         $cap = 48 * (float) ($planet["planet_{$res}_perhour"] ?? 0);
-                        $reserve[$res] = min((float) $wanted[$res], max($cap, 100_000.0));
+                        $reserve[$res] += min((float) $wanted[$res], max($cap, 100_000.0));
                     }
-                    $result['reserved']++;
+                    $saving = true;
                     if ($dryRun) {
                         $this->line(sprintf(
-                            "  [%d] %s: saving for %s on %d:%d:%d (reserve %dK/%dK/%dK, has %dK/%dK/%dK)",
+                            "  [%d] %s: saving for %s on %d:%d:%d (%s)",
                             $bot->id, $bot->name, $this->getBuildingName((int) $wanted['building_id']),
                             $planet['planet_galaxy'], $planet['planet_system'], $planet['planet_planet'],
-                            $reserve['metal'] / 1000, $reserve['crystal'] / 1000, $reserve['deuterium'] / 1000,
-                            ($planet['planet_metal'] ?? 0) / 1000, ($planet['planet_crystal'] ?? 0) / 1000, ($planet['planet_deuterium'] ?? 0) / 1000
+                            $this->brain->lastBuildingReason
                         ));
                     }
                 }
             }
+            if ($researchPlan !== null && !$researchPlan['affordable']) {
+                foreach (['metal', 'crystal', 'deuterium'] as $res) {
+                    $cap = 48 * (float) ($planet["planet_{$res}_perhour"] ?? 0);
+                    $reserve[$res] += min((float) $researchPlan['cost'][$res], max($cap, 50_000.0));
+                }
+                $saving = true;
+            }
+            $wantColonyShip = $isColonyYard && $account['need_colony_ship'];
+            if ($wantColonyShip) {
+                $colonyCost = $this->brain->price(208);
+                foreach (['metal', 'crystal', 'deuterium'] as $res) {
+                    $reserve[$res] += $colonyCost[$res];
+                }
+                $saving = true;
+            }
+            if ($saving) {
+                $result['reserved']++;
+            }
 
-            $shipDecision = $this->brain->nextShip($planet, $user, $reserve);
+            $shipDecision = $this->brain->nextShip($planet, $user, $reserve, [
+                'want_colony_ship' => $wantColonyShip,
+                'economy_first' => $account['colonies'] < 1,
+                'main_planet' => $isResearchPlanet || $isColonyYard,
+            ]);
 
             if ($shipDecision !== null) {
                 $shipId = $shipDecision['ship_id'];
                 $count = $shipDecision['count'];
 
                 if (!$dryRun) {
-                    $this->queueShipProduction($planet['planet_id'], $shipId, $count, $shipDecision['cost']);
+                    $this->queueShipProduction($planetId, $shipId, $count, $shipDecision['cost']);
+                }
+
+                if ($shipId === 208) {
+                    $account['need_colony_ship'] = false;
+                    $this->line("  [{$bot->id}] {$bot->name}: colony ship queued on {$planet['planet_galaxy']}:{$planet['planet_system']}:{$planet['planet_planet']}");
                 }
 
                 $result['ship_built'] = true;
                 $result['ship'] = $this->getShipName($shipId) . " x{$count}";
 
-                if (!$dryRun) {
+                if (!$dryRun && $planetModel) {
                     $planetModel->refresh();
                     $this->syncPlanetFromModel($planet, $planetModel);
-                }
-            }
-
-            // Queue research (once per bot, from first planet with a lab)
-            $isResearchPlanet = false;
-            $researchId = null;
-            if (!$researchQueued) {
-                $labLevel = (int) ($planet['building_laboratory'] ?? 0);
-
-                if ($labLevel >= 1 && $planetModel) {
-                    $isResearchPlanet = true;
-                    $researchId = $this->brain->nextResearch($user, $planet);
-
-                    if ($researchId !== null && !$dryRun) {
-                        $technocrateActive = (int) ($user['premium_officier_technocrat'] ?? 0) > time();
-                        $success = $this->researchQueueService->add($bot, $planetModel, $user, $researchId, $technocrateActive);
-
-                        if ($success) {
-                            $result['research'] = 'research queued';
-                        }
-                    } elseif ($researchId !== null) {
-                        $result['research'] = 'research queued';
-                    }
-                    $researchQueued = true;
                 }
             }
 
@@ -638,57 +719,8 @@ class BotTick extends Command
                 }
             }
 
-            // Resource trading — planets only: a moon's stock goes home to its own planet (Phase 4.8)
-            if (((int) ($planet['planet_type'] ?? 1)) === 1
-                && !$this->dispatcher->hasActiveFleetFromPlanet($planet['planet_galaxy'], $planet['planet_system'], $planet['planet_planet'])
-            ) {
-                $tradeOpportunity = $this->trader->findSharingOpportunity($planet, $user);
-
-                if ($tradeOpportunity !== null) {
-                    $destination = [
-                        'galaxy' => $tradeOpportunity['target_galaxy'],
-                        'system' => $tradeOpportunity['target_system'],
-                        'planet' => $tradeOpportunity['target_planet'],
-                    ];
-
-                    if (!$dryRun) {
-                        $fleetId = $this->dispatcher->sendTransport(
-                            $planet, $user, $destination,
-                            $tradeOpportunity['metal'],
-                            $tradeOpportunity['crystal'],
-                            $tradeOpportunity['deuterium']
-                        );
-
-                        if ($fleetId) {
-                            $this->line("  [{$bot->id}] {$bot->name}: sharing resources from {$planet['planet_galaxy']}:{$planet['planet_system']}:{$planet['planet_planet']}");
-                        }
-                    }
-                }
-            }
-
-            // Colonization
-            if (!$this->dispatcher->hasActiveFleetFromPlanet($planet['planet_galaxy'], $planet['planet_system'], $planet['planet_planet'])
-                && $this->colonizer->shouldColonize($user)
-                && $this->colonizer->hasColonyShip($planet)
-            ) {
-                $colTarget = $this->colonizer->findColonizationTarget($planet, $bot->id);
-
-                if ($colTarget !== null) {
-                    $colonyFleet = [208 => 1];
-                    if ((int) ($planet['ship_small_cargo_ship'] ?? 0) > 0) {
-                        $colonyFleet[202] = 1;
-                    }
-
-                    if (!$dryRun) {
-                        $fleetId = $this->dispatcher->sendColonize($planet, $user, $colTarget, $colonyFleet);
-                        if ($fleetId) {
-                            $this->line("  [{$bot->id}] {$bot->name}: colonizing from {$planet['planet_galaxy']}:{$planet['planet_system']}:{$planet['planet_planet']}");
-                        }
-                    } else {
-                        $this->line("  [{$bot->id}] {$bot->name}: would colonize {$colTarget['galaxy']}:{$colTarget['system']}:{$colTarget['planet']}");
-                    }
-                }
-            }
+            // (Resource sharing with OTHER bots and the old in-loop colonisation are gone since 30 Sep:
+            //  colonies are founded and fed once per bot after the loop — see colonise() / feedColonies().)
 
             // Debris field harvesting — the field on the bot's own doorstep first (every raid it
             // suffers leaves one), then fields it knows about from its own battles, both sized from
@@ -794,6 +826,10 @@ class BotTick extends Command
                 $user[substr($key, 9)] = $value;
             }
         }
+
+        // --- Phase 4.7: Colonise, then feed young colonies (once per bot) ---
+        $result['colonise'] = $this->colonise($bot, $user, $planetRows, $dryRun);
+        $result['feeds'] = $this->feedColonies($bot, $user, $planetRows, $dryRun);
 
         // Parse espionage reports (once per bot)
         $intelParsed = $this->intel->parseNewReports($bot->id);
@@ -1258,7 +1294,7 @@ class BotTick extends Command
                 continue;
             }
 
-            $next = $this->moonNextBuilding($moon);
+            $next = $this->moonNextBuilding($moon, $user);
 
             if ($next === null) {
                 continue; // All moon buildings maxed
@@ -1355,7 +1391,7 @@ class BotTick extends Command
      * @param  array<string, mixed>  $moon
      * @return array{id: int, level: int, cost: array{metal: float, crystal: float, deuterium: float}}|null
      */
-    private function moonNextBuilding(array $moon): ?array
+    private function moonNextBuilding(array $moon, array $user = []): ?array
     {
         foreach (\App\Services\Bot\BotBrain::MOON_BUILDING_PRIORITY as $bId => $config) {
             $lvl = $this->brain->getBuildingLevel($bId, $moon);
@@ -1364,16 +1400,17 @@ class BotTick extends Command
                 continue;
             }
 
-            $lunarBaseLevel = $this->brain->getBuildingLevel(41, $moon);
-            $rfLevel = $this->brain->getBuildingLevel(14, $moon);
-
-            if (in_array($bId, [42, 43, 44], true) && $lunarBaseLevel < 1) { // Phalanx, Jump Gate, Silo
-                [$bId, $lvl] = [41, $lunarBaseLevel]; // Force Lunar Base first
-            } elseif ($bId === 43 && $rfLevel < 1) { // Jump Gate needs RF >= 1
-                [$bId, $lvl] = [14, $rfLevel];
+            // Skip what the moon can't have yet (Jump Gate before Hyperspace Tech 7) instead of
+            // saving for it for ever; Phalanx/Jump Gate need the Lunar Base first.
+            if (!empty($user) && !$this->brain->allowed($bId, $moon, $user)) {
+                if ($this->brain->getBuildingLevel(41, $moon) < 1) {
+                    [$bId, $lvl] = [41, 0];
+                } else {
+                    continue;
+                }
             }
 
-            return ['id' => $bId, 'level' => $lvl, 'cost' => $this->getMoonBuildingCost($bId, $lvl)];
+            return ['id' => $bId, 'level' => $lvl, 'cost' => $this->brain->price($bId, $lvl)];
         }
 
         return null;
@@ -1444,7 +1481,7 @@ class BotTick extends Command
         }
 
         $keep = ['metal' => 0.0, 'crystal' => 0.0, 'deuterium' => 0.0];
-        $next = $this->moonNextBuilding($moon);
+        $next = $this->moonNextBuilding($moon, $user);
         if ($next !== null) {
             $keep = $next['cost'];
         }
@@ -1520,6 +1557,223 @@ class BotTick extends Command
         }
 
         return $best ?? $this->refreshPlanetShips((array) $planetRows[0]);
+    }
+
+    /**
+     * Per-bot plan for this tick: which planet researches, which builds colony ships, and whether
+     * the account still wants colonies.
+     *
+     * @param  array<int, object|array<string, mixed>>  $planetRows
+     * @return array{research_planet_id: int, colony_yard_id: int, colony_push: bool, need_colony_ship: bool, colony_slots: int, colonies: int}
+     */
+    private function accountPlan(User $bot, array $user, array $planetRows): array
+    {
+        $researchPlanetId = 0;
+        $bestLab = -1;
+        $yardId = 0;
+        $bestYard = -1;
+        $colonyShips = 0;
+
+        foreach ($planetRows as $row) {
+            $row = (array) $row;
+            $colonyShips += (int) ($row['ship_colony_ship'] ?? 0)
+                + ($this->brain->parseHangarQueue((string) ($row['planet_b_hangar_id'] ?? ''))[208] ?? 0);
+
+            if ((int) ($row['planet_type'] ?? 1) !== 1) {
+                continue;
+            }
+
+            $lab = (int) ($row['building_laboratory'] ?? 0);
+            if ($lab > $bestLab) {
+                [$bestLab, $researchPlanetId] = [$lab, (int) $row['planet_id']];
+            }
+
+            $yard = (int) ($row['building_hangar'] ?? 0) * 100 + (int) ($row['building_metal_mine'] ?? 0);
+            if ($yard > $bestYard) {
+                [$bestYard, $yardId] = [$yard, (int) $row['planet_id']];
+            }
+        }
+
+        $astro = (int) ($user['research_astrophysics'] ?? 0);
+        $slots = $this->colonizer->colonySlotsFree((int) $bot->id, $astro);
+        $colonies = count(array_filter($planetRows, fn ($r) => (int) (((array) $r)['planet_type'] ?? 1) === 1)) - 1;
+
+        return [
+            'research_planet_id' => $researchPlanetId,
+            'colony_yard_id' => $yardId,
+            // Get Shipyard 4 + Robot 2 ready from the start, and keep going while colonies are allowed
+            'colony_push' => $colonies < \App\Services\Bot\ColonizationService::MAX_COLONIES && ($astro < 1 || $slots > 0),
+            'need_colony_ship' => $astro >= 1 && $slots > $colonyShips,
+            'colony_slots' => $slots,
+            'colonies' => $colonies,
+        ];
+    }
+
+    /**
+     * Send every colony ship the bot owns to the best free slot, while the account may still found
+     * colonies. Not blocked by other fleets being out (it was: any fleet out from the planet did).
+     *
+     * @param  array<int, object|array<string, mixed>>  $planetRows
+     */
+    private function colonise(User $bot, array $user, array $planetRows, bool $dryRun): int
+    {
+        $astro = (int) ($user['research_astrophysics'] ?? 0);
+        if ($astro < 1) {
+            return 0;
+        }
+
+        $sent = 0;
+        foreach ($planetRows as $row) {
+            $planet = $this->refreshPlanetShips((array) $row);
+            if ((int) ($planet['ship_colony_ship'] ?? 0) < 1) {
+                continue;
+            }
+            if ($this->colonizer->colonySlotsFree((int) $bot->id, $astro) < 1) {
+                break;
+            }
+
+            $target = $this->colonizer->findColonizationTarget($planet, (int) $bot->id, $astro);
+            if ($target === null) {
+                $this->line("  [{$bot->id}] {$bot->name}: no free colony slot found near {$planet['planet_galaxy']}:{$planet['planet_system']}");
+                continue;
+            }
+
+            $ships = [208 => 1];
+            if ((int) ($planet['ship_big_cargo_ship'] ?? 0) > 0) {
+                $ships[203] = 1;
+            } elseif ((int) ($planet['ship_small_cargo_ship'] ?? 0) > 0) {
+                $ships[202] = 1;
+            }
+            $where = "{$target['galaxy']}:{$target['system']}:{$target['planet']}";
+
+            if ($dryRun) {
+                $this->line("  [{$bot->id}] {$bot->name}: would colonise {$where}");
+                $sent++;
+                continue;
+            }
+
+            if ($this->dispatcher->sendColonize($planet, $user, $target, $ships)) {
+                $this->line("  [{$bot->id}] {$bot->name}: colonising {$where}");
+                $sent++;
+            }
+        }
+
+        return $sent;
+    }
+
+    /**
+     * Young colonies (Metal Mine < 12) get a share of the richest planet's stock, one transport per
+     * colony at a time. Replaces ResourceTrader, which gave balanced/turtle bots' resources to OTHER
+     * bots and ignored what the giver was saving for.
+     *
+     * @param  array<int, object|array<string, mixed>>  $planetRows
+     */
+    private function feedColonies(User $bot, array $user, array $planetRows, bool $dryRun): int
+    {
+        $planets = array_values(array_filter(
+            array_map(fn ($r) => (array) $r, $planetRows),
+            fn ($p) => (int) ($p['planet_type'] ?? 1) === 1
+        ));
+        if (count($planets) < 2) {
+            return 0;
+        }
+
+        $donor = null;
+        $donorStock = 0.0;
+        foreach ($planets as $p) {
+            $p = $this->refreshPlanetShips($p);
+            $stock = (float) $p['planet_metal'] + (float) $p['planet_crystal'] + (float) $p['planet_deuterium'];
+            if ((int) ($p['building_metal_mine'] ?? 0) >= 12 && $stock > $donorStock) {
+                [$donor, $donorStock] = [$p, $stock];
+            }
+        }
+        if ($donor === null || $donorStock < 60_000) {
+            return 0;
+        }
+
+        $fed = 0;
+        foreach ($planets as $colony) {
+            if ((int) $colony['planet_id'] === (int) $donor['planet_id'] || (int) ($colony['building_metal_mine'] ?? 0) >= 12) {
+                continue;
+            }
+
+            $inbound = DB::table('fleets')
+                ->where('fleet_owner', (int) $bot->id)
+                ->where('fleet_mission', Missions::TRANSPORT)
+                ->where('fleet_mess', 0)
+                ->where('fleet_end_galaxy', (int) $colony['planet_galaxy'])
+                ->where('fleet_end_system', (int) $colony['planet_system'])
+                ->where('fleet_end_planet', (int) $colony['planet_planet'])
+                ->where('fleet_end_type', 1)
+                ->exists();
+            if ($inbound) {
+                continue;
+            }
+
+            // A fifth of the donor's stock per young colony, at most ~150K, in a 3:2:1 mix
+            $metal = (int) min((float) $donor['planet_metal'] * 0.2, 75_000);
+            $crystal = (int) min((float) $donor['planet_crystal'] * 0.2, 50_000);
+            $deut = (int) min((float) $donor['planet_deuterium'] * 0.2, 25_000);
+            if ($metal + $crystal + $deut < 10_000) {
+                break;
+            }
+
+            $dest = [
+                'galaxy' => (int) $colony['planet_galaxy'],
+                'system' => (int) $colony['planet_system'],
+                'planet' => (int) $colony['planet_planet'],
+                'type' => 1,
+            ];
+            $where = "{$dest['galaxy']}:{$dest['system']}:{$dest['planet']}";
+
+            if ($dryRun) {
+                $this->line("  [{$bot->id}] {$bot->name}: would feed colony {$where}");
+                $fed++;
+                continue;
+            }
+
+            if ($this->dispatcher->sendTransport($donor, $user, $dest, $metal, $crystal, $deut)) {
+                $this->line("  [{$bot->id}] {$bot->name}: feeding colony {$where}");
+                $fed++;
+                $donor = $this->refreshPlanetShips($donor);
+            }
+        }
+
+        return $fed;
+    }
+
+    /** Max expedition points (Expedition.php), from the top player's score; cached per tick. */
+    private function maxExpeditionPoints(): int
+    {
+        if ($this->expeditionPointsCache === null) {
+            $top = (float) (DB::table('users_statistics')->max('user_statistic_total_points') ?? 0);
+            $this->expeditionPointsCache = app(\App\Services\Game\Formulas\ExpeditionService::class)->getMaxExpeditionPoints($top);
+        }
+
+        return $this->expeditionPointsCache;
+    }
+
+    private ?int $expeditionPointsCache = null;
+
+    /** Per-bot exceptions go to storage/logs/bot-tick-errors-YYYY-MM.log (not only the console). */
+    private function logBotError(User $bot, \Throwable $e, bool $dryRun): void
+    {
+        try {
+            $line = sprintf(
+                "%s | %sbot %d %s | %s: %s @ %s:%d\n",
+                date('Y-m-d H:i:s'),
+                $dryRun ? 'DRY ' : '',
+                $bot->id,
+                $bot->name,
+                get_class($e),
+                $e->getMessage(),
+                basename($e->getFile()),
+                $e->getLine()
+            );
+            file_put_contents(storage_path('logs/bot-tick-errors-' . date('Y-m') . '.log'), $line, FILE_APPEND | LOCK_EX);
+        } catch (\Throwable) {
+            // never let logging break the tick
+        }
     }
 
     /**
@@ -1811,7 +2065,8 @@ class BotTick extends Command
             214 => 'Deathstar', 215 => 'Reaper',
             401 => 'Rocket Launcher', 402 => 'Light Laser', 403 => 'Heavy Laser',
             404 => 'Gauss Cannon', 405 => 'Ion Cannon', 406 => 'Plasma Turret',
-            502 => 'Small Shield Dome', 503 => 'Large Shield Dome',
+            407 => 'Small Shield Dome', 408 => 'Large Shield Dome',
+            502 => 'Anti-Ballistic Missile', 503 => 'Interplanetary Missile',
         ];
 
         return $names[$shipId] ?? "Unit #{$shipId}";
@@ -1867,6 +2122,30 @@ class BotTick extends Command
 
         if (array_sum($fleet) < self::EXPEDITION_MIN_COMBAT_SHIPS) {
             return [];
+        }
+
+        // Finds stop growing at the game's max expedition points (Expedition.php:
+        // (metal + crystal) x 5 / 1000 per ship, capped by the top player's score). Ships past the
+        // cap only burn fuel — after Phase 1 cut the fuel, expedition fleets grew 3.5x (122 -> 433).
+        $maxPoints = $this->maxExpeditionPoints();
+        $points = 0;
+        foreach ($fleet as $shipId => $count) {
+            $points += self::EXPEDITION_SHIP_VALUE[$shipId] * 5 / 1000 * $count;
+        }
+        if ($points > $maxPoints) {
+            $scale = $maxPoints / $points;
+            $value = 0;
+            foreach ($fleet as $shipId => $count) {
+                $fleet[$shipId] = max(0, (int) floor($count * $scale));
+                if ($fleet[$shipId] === 0) {
+                    unset($fleet[$shipId]);
+                    continue;
+                }
+                $value += $fleet[$shipId] * self::EXPEDITION_SHIP_VALUE[$shipId];
+            }
+            if (array_sum($fleet) < self::EXPEDITION_MIN_COMBAT_SHIPS) {
+                return [];
+            }
         }
 
         // Best-case find: 20 % of the fleet's value × the stay multiplier (1 + (h−1)·2/7)

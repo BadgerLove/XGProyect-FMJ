@@ -4,176 +4,311 @@ declare(strict_types=1);
 
 namespace App\Services\Bot;
 
-use App\Models\Planets;
-use App\Models\User;
+use App\Core\GameObjects\GameObjectRegistry;
 use App\Services\Bot\ThreatAnalyzer;
+use App\Services\Game\DevelopmentDataService;
+use App\Services\Game\Formulas\DevelopmentsService;
 use App\Services\Game\Formulas\ProductionService;
 use Xgp\App\Core\Enumerators\BuildingsEnumerator as Buildings;
 
 /**
- * Bot decision engine — Tier 1 (buildings) + Tier 2 (ships, research, attacks).
+ * Bot decision engine: buildings, research, shipyard and attack planning.
  *
- * Supports multiple personalities: passive, raider, turtle, balanced.
+ * Phase 2 (30 Sep 2026) rebuilt the economy half so a bot goes from a fresh start to end-game:
+ *  - every requirement and price comes from the game itself (DevelopmentsService /
+ *    DevelopmentDataService); the old hand-copied tables had drifted (storage 2x, Fusion without
+ *    its Deuterium 5 requirement, "502" used as a shield dome when it is the anti-ballistic missile);
+ *  - colonisation is the early-game spine (research walk to Astrophysics, Shipyard 4, colony ship);
+ *  - building is field-aware and keeps two fields back for Nanite + Terraformer, the way out of a
+ *    full planet (314 of 365 homes were full with no way out on 29 Sep);
+ *  - research follows a goal ladder through the tech tree and is saved for, instead of only
+ *    buying what the shipyard left over;
+ *  - the shipyard builds the best ship it may legally build, after the colony-ship, probe,
+ *    recycler and cargo floors.
+ *
+ * Personalities: raider, balanced, turtle, passive.
  */
 class BotBrain
 {
-    /**
-     * All building types a bot might construct, ordered by personality weight.
-     * @var array<string, array<int, float>>
-     */
+    // ─── Buildings ───────────────────────────────────────────────────────────
+
+    /** Mine weights per personality (divide the mine's days-to-pay-back; higher = preferred). */
     private const BUILDING_WEIGHTS = [
         'raider' => [
-            Buildings::BUILDING_METAL_MINE       => 1.2,
-            Buildings::BUILDING_CRYSTAL_MINE      => 1.0,
-            Buildings::BUILDING_DEUTERIUM_SINTETIZER => 0.6,
-            Buildings::BUILDING_SOLAR_PLANT       => 1.0,
-            Buildings::BUILDING_HANGAR            => 1.5,
-            Buildings::BUILDING_LABORATORY        => 1.0,
-            Buildings::BUILDING_ROBOT_FACTORY     => 0.8,
-            Buildings::BUILDING_NANO_FACTORY      => 1.0,
+            Buildings::BUILDING_METAL_MINE           => 1.2,
+            Buildings::BUILDING_CRYSTAL_MINE         => 1.4,
+            Buildings::BUILDING_DEUTERIUM_SINTETIZER => 0.7,
+        ],
+        'balanced' => [
+            Buildings::BUILDING_METAL_MINE           => 1.2,
+            Buildings::BUILDING_CRYSTAL_MINE         => 1.4,
+            Buildings::BUILDING_DEUTERIUM_SINTETIZER => 0.8,
         ],
         'turtle' => [
-            Buildings::BUILDING_METAL_MINE       => 1.2,
-            Buildings::BUILDING_CRYSTAL_MINE      => 1.0,
+            Buildings::BUILDING_METAL_MINE           => 1.2,
+            Buildings::BUILDING_CRYSTAL_MINE         => 1.4,
             Buildings::BUILDING_DEUTERIUM_SINTETIZER => 0.8,
-            Buildings::BUILDING_SOLAR_PLANT       => 1.0,
-            Buildings::BUILDING_HANGAR            => 1.2,
-            Buildings::BUILDING_LABORATORY        => 1.0,
-            Buildings::BUILDING_ROBOT_FACTORY     => 0.8,
-            Buildings::BUILDING_NANO_FACTORY      => 1.0,
         ],
         'passive' => [
-            Buildings::BUILDING_METAL_MINE       => 1.5,
-            Buildings::BUILDING_CRYSTAL_MINE      => 1.5,
+            Buildings::BUILDING_METAL_MINE           => 1.5,
+            Buildings::BUILDING_CRYSTAL_MINE         => 1.5,
             Buildings::BUILDING_DEUTERIUM_SINTETIZER => 1.2,
-            Buildings::BUILDING_SOLAR_PLANT       => 1.0,
-            Buildings::BUILDING_HANGAR            => 0.5,
-            Buildings::BUILDING_LABORATORY        => 0.8,
-            Buildings::BUILDING_ROBOT_FACTORY     => 0.8,
-            Buildings::BUILDING_NANO_FACTORY      => 1.0,
         ],
     ];
 
-    /**
-     * Ship build priority for raiders.
-     * [ship_id => min_hangar_level]
-     * @var array<int, int>
-     */
-    private const SHIP_PRIORITY_RAIDER = [
-        210 => 1,  // Espionage Probe (scouting — capped at 10 total)
-        202 => 1,  // Small Cargo (raid ships — cheap, fast)
-        204 => 1,  // Light Fighter (combat — main attack ship)
-        205 => 3,  // Heavy Fighter (better combat — needs hangar 3, Impulse 2, Armour 2)
-        208 => 4,  // Colony Ship (expansion — needs hangar 4, Impulse 3, cap at 1)
-        203 => 4,  // Large Cargo (bigger raids — needs hangar 4, Combustion 6)
-        206 => 5,  // Cruiser (heavy combat — needs hangar 5, Impulse 4, Ionic 2)
-        207 => 7,  // Battleship (endgame — needs hangar 7, Hyperspace Drive 4)
+    /** Highest level the brain will take each building to. */
+    private const BUILDING_CAPS = [
+        Buildings::BUILDING_METAL_MINE           => 35,
+        Buildings::BUILDING_CRYSTAL_MINE         => 32,
+        Buildings::BUILDING_DEUTERIUM_SINTETIZER => 32,
+        Buildings::BUILDING_SOLAR_PLANT          => 30,
+        Buildings::BUILDING_FUSION_REACTOR       => 22,
+        Buildings::BUILDING_ROBOT_FACTORY        => 10,
+        Buildings::BUILDING_NANO_FACTORY         => 7,
+        Buildings::BUILDING_HANGAR               => 12,
+        Buildings::BUILDING_LABORATORY           => 12,
+        Buildings::BUILDING_METAL_STORE          => 14,
+        Buildings::BUILDING_CRYSTAL_STORE        => 14,
+        Buildings::BUILDING_DEUTERIUM_TANK       => 14,
+        Buildings::BUILDING_TERRAFORMER          => 12,
     ];
 
     /**
-     * Ship/defense build priority for turtles.
-     * [id => min_hangar_level]
-     * @var array<int, int>
-     */
-    private const SHIP_PRIORITY_TURTLE = [
-        401 => 1,  // Rocket Launcher (cheap, mass defense)
-        402 => 1,  // Light Laser (better defense)
-        403 => 2,  // Heavy Laser (needs hangar 2)
-        404 => 3,  // Gauss Cannon (strong defense — needs hangar 3)
-        502 => 1,  // Small Shield Dome (shield)
-        405 => 4,  // Ion Cannon (needs hangar 4)
-        406 => 6,  // Plasma Turret (endgame defense — needs hangar 6)
-    ];
-
-    /**
-     * Build priority for passive bots — probes for intel + defenses only.
-     * No combat ships. Passive bots are resource targets, not fighters.
-     * @var array<int, int>
-     */
-    private const SHIP_PRIORITY_PASSIVE = [
-        210 => 1,  // Espionage Probe (intel — cap at 5)
-        401 => 1,  // Rocket Launcher (cheap defense)
-        402 => 1,  // Light Laser (better defense)
-        403 => 2,  // Heavy Laser (needs hangar 2)
-        404 => 3,  // Gauss Cannon (needs hangar 3)
-        502 => 1,  // Small Shield Dome
-        405 => 4,  // Ion Cannon (needs hangar 4)
-    ];
-
-    /**
-     * Moon building priority — sequential, no ROI needed.
-     *
-     * Moons can NOT have mines, solar plants, fusion reactors, or storage.
-     * Only these buildings are valid: Lunar Base, Robot Factory, Sensor Phalanx,
-     * Jump Gate, Missile Silo, and (if we add it) Research Lab.
-     *
-     * Priority:
-     *   1. Lunar Base — adds fields (everything else needs fields)
-     *   2. Robot Factory — speeds up all construction
-     *   3. Sensor Phalanx — spy on neighbors in range (STRATEGIC: see fleet movements)
-     *   4. Missile Silo — defense + IPM capability
-     *   5. Jump Gate — instant fleet teleport between moons (endgame, needs 2 moons)
+     * Moon build order (strict: wait for the next one rather than skip to a cheaper one), but a
+     * building the moon may never have is skipped. The Missile Silo is gone from the list: it
+     * needs a Shipyard, which moons never get, so the old order would have frozen every moon at it.
      *
      * @var array<int, array{cap: int, min_rf: int}>
      */
     public const MOON_BUILDING_PRIORITY = [
-        Buildings::BUILDING_MONDBASIS  => ['cap' => 10, 'min_rf' => 0],  // Lunar Base — 3 fields per level
+        Buildings::BUILDING_MONDBASIS     => ['cap' => 10, 'min_rf' => 0],  // Lunar Base — fields
         Buildings::BUILDING_ROBOT_FACTORY => ['cap' => 10, 'min_rf' => 0],  // Robot Factory — build speed
-        Buildings::BUILDING_PHALANX    => ['cap' => 5,  'min_rf' => 0],  // Sensor Phalanx — scout neighbors
-        Buildings::BUILDING_MISSILE_SILO => ['cap' => 5,  'min_rf' => 0],  // Missile Silo — defense
-        Buildings::BUILDING_JUMP_GATE  => ['cap' => 1,  'min_rf' => 0],  // Jump Gate — instant travel
+        Buildings::BUILDING_PHALANX       => ['cap' => 5,  'min_rf' => 0],  // Sensor Phalanx — watch neighbours
+        Buildings::BUILDING_JUMP_GATE     => ['cap' => 1,  'min_rf' => 0],  // Jump Gate — needs Hyperspace Tech 7
     ];
 
+    /** Fields held back for Nanite Factory and Terraformer while they are still missing. */
+    private const RESERVED_FIELDS_NANITE = 1;
+    private const RESERVED_FIELDS_TERRAFORMER = 1;
+
+    /** Below this many usable fields only the essentials get built (no storage/extra facilities). */
+    private const TIGHT_FIELDS = 12;
+
+    /** Returned by saveOrFix(): the item can't be reached soon, so don't save for it; carry on down the chain. */
+    private const FALL_THROUGH = -1;
+
+    /** Save for something only if the planet's income reaches it within this many hours. */
+    private const MAX_SAVE_HOURS = 96.0;
+
+    /** How many hours of production storage should hold. */
+    private const DEPOSIT_HOURS = 12;
+
+    /** Buildings that pay back slower than this (days) are not worth it. */
+    private const MAX_DOIR_DAYS = 90.0;
+
+    // ─── Research ────────────────────────────────────────────────────────────
+
     /**
-     * Research priority for raiders (dead code — see nextResearch() for actual order).
-     * @var array<int, int>
+     * The research goal ladder, walked in order. A goal whose requirement is missing becomes that
+     * requirement (research), or a Lab request for the research planet. The first rungs are the
+     * colonisation spine: Astrophysics 1 needs Espionage 4 + Impulse 3 + Lab 3.
+     *
+     * @var list<array{0: int, 1: int}>  [tech id, target level]
      */
-    private const RESEARCH_RAIDER = [
-        113 => 8,  // Energy Tech
-        115 => 6,  // Combustion Drive
-        120 => 6,  // Laser Tech
-        106 => 3,  // Espionage Tech
-        117 => 4,  // Impulse Drive
-        111 => 5,  // Armour Tech
-        121 => 2,  // Ionic Tech
-        109 => 5,  // Weapons Tech
-        108 => 3,  // Computer Tech
-        110 => 5,  // Shielding Tech
-        114 => 3,  // Hyperspace Tech
-        118 => 4,  // Hyperspace Drive
+    private const RESEARCH_GOALS = [
+        [113, 1], [115, 2], [106, 2], [115, 3], [117, 3], [106, 4], [124, 1],   // first colony
+        [108, 2], [124, 3],                                                      // second colony
+        [113, 3], [110, 2], [115, 6], [108, 4], [124, 5],                       // recyclers, large cargo, 3rd colony
+        [111, 3], [109, 3], [117, 4], [120, 5], [121, 2], [113, 6],             // cruisers
+        [124, 7], [110, 5], [113, 8], [114, 5], [118, 4], [106, 6],             // battleships, 4th colony
+        [108, 10], [113, 12],                                                    // Nanite + Terraformer
+        [124, 9], [109, 8], [110, 8], [111, 8], [120, 10], [121, 5], [122, 5], [117, 6], // bombers, 5th colony
+        [118, 6], [114, 8], [120, 12], [118, 7], [124, 11],                      // destroyers, battlecruisers
+        [109, 12], [110, 12], [111, 12], [122, 7], [115, 12], [117, 10], [124, 13], [108, 12],
     ];
 
+    /** Goals the walk may look past one that waits for the Lab. */
+    private const RESEARCH_LOOKAHEAD = 4;
+
+    /** Research caps for the DOIR fallback once the ladder is done. */
+    private const RESEARCH_CAPS = [
+        106 => 12, 108 => 14, 109 => 16, 110 => 16, 111 => 16, 113 => 16, 114 => 12, 115 => 16,
+        117 => 14, 118 => 12, 120 => 14, 121 => 10, 122 => 12, 124 => 13,
+    ];
+
+    // ─── Shipyard ────────────────────────────────────────────────────────────
+
     /**
-     * When true, canAfford() says yes to everything — used by wantedBuildingCost() to ask
-     * "what would you build if money were no object?" without duplicating the selection logic.
+     * Combat lists, BEST FIRST: the shipyard buys the first one it may build and afford. Until
+     * 30 Sep the raider list ran cheapest-first and the loop took the first affordable entry, so
+     * raiders bought Light Fighters for ever.
+     */
+    private const COMBAT_SHIPS = [
+        'raider'   => [215, 213, 207, 211, 206, 205, 204],
+        'balanced' => [213, 215, 207, 206, 211, 205, 204],
+        'turtle'   => [207, 206, 205, 204],
+    ];
+
+    /** Defence lists, best first (407/408 = the real shield domes; 502 was the ABM). */
+    private const DEFENCES = [
+        'turtle'  => [406, 404, 405, 403, 402, 401],
+        'passive' => [405, 403, 402, 401],
+    ];
+
+    /** Share of the spendable (above-reserve) resources combat/defence may use per tick. */
+    private const COMBAT_SPEND_SHARE = [
+        'raider' => 0.4, 'balanced' => 0.3, 'turtle' => 0.3, 'passive' => 0.2,
+    ];
+
+    /** Military spend multiplier until the first colony exists. */
+    private const ECONOMY_FIRST_SHARE = 0.25;
+
+    /** Turtles put this share of their military spend into defence (rest into ships). */
+    private const TURTLE_DEFENCE_SHARE = 0.6;
+
+    /** Hard caps (owned + queued) for support ships. */
+    private const SHIP_CAPS = [
+        210 => 30,   // Espionage Probe
+        212 => 400,  // Solar Satellite
+        208 => 1,    // Colony Ship (one at a time)
+        209 => 40,   // Recycler
+        407 => 1,    // Small Shield Dome (the game allows one)
+        408 => 1,    // Large Shield Dome
+    ];
+
+    private const PROBE_FLOOR = 15;
+    private const PROBE_FLOOR_QUIET = 5;   // turtles + passive: enough to see who is coming
+    private const RECYCLER_FLOOR = 10;
+    private const SMALL_CARGO_FLOOR = 5;   // colony starter kits, moon supply, early raids
+    private const LARGE_CARGO_FLOOR = 10;
+
+    /** Per-tick ceiling on one shipyard order, whatever the budget. */
+    private const MAX_ORDER = 2000;
+
+    // ─── State ───────────────────────────────────────────────────────────────
+
+    /**
+     * When true, affordability checks pass — wantedBuildingCost() uses it to ask "what would you
+     * build if money were no object?" without duplicating the selection logic.
      */
     private bool $ignoreAffordability = false;
+
+    /** Lab level the last researchPlan() needed on the research planet (0 = none). */
+    public int $lastLabNeeded = 0;
+
+    /** Why the last nextBuilding() returned what it did (for tick output / debugging). */
+    public string $lastBuildingReason = '';
 
     public function __construct(
         private readonly ProductionService $productionService,
         private readonly ThreatAnalyzer $threatAnalyzer,
         private readonly BattleSimulator $simulator,
+        private readonly DevelopmentsService $developments,
+        private readonly DevelopmentDataService $developmentData,
+        private readonly GameObjectRegistry $registry,
     ) {
     }
 
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Game rules (the game's own services — never hand-copied tables)
+    // ═════════════════════════════════════════════════════════════════════════
+
     /**
-     * Cost of the building the brain WANTS next on this planet, ignoring what it can afford
-     * right now. Null when there is genuinely nothing to build (or research is the better buy).
-     *
-     * BotTick uses this as a spending reserve for the shipyard: while the planet is saving up
-     * for this building, combat ships/defence may only spend what is left above the reserve.
-     * Before this (6 Sep) the hangar took every spare crystal each tick (cruisers 7K, heavy
-     * fighters 4K) so 250-460K-crystal buildings were never reached — 140-190 idle planets.
+     * Object id => level for this planet + user (buildings, ships, defences from the planet,
+     * research from the user).
      *
      * @param  array<string, mixed>  $planet
      * @param  array<string, mixed>  $user
+     * @return array<int, int>
+     */
+    public function levels(array $planet, array $user): array
+    {
+        return $this->developmentData->levelsFromData($planet, $user);
+    }
+
+    /** Does the game allow building / researching $id here? */
+    public function allowed(int $id, array $planet, array $user): bool
+    {
+        return $this->developments->isDevelopmentAllowed($id, $this->levels($planet, $user));
+    }
+
+    /**
+     * Price of taking $id from $level to $level + 1 (ships/defences: one unit).
+     *
+     * @return array{metal: float, crystal: float, deuterium: float}
+     */
+    public function price(int $id, int $level = 0): array
+    {
+        $isUnit = $id >= 200 && $id < 600;
+        $cost = $this->developments->developmentPrice($id, $level, !$isUnit);
+
+        return [
+            'metal' => (float) ($cost['metal'] ?? 0),
+            'crystal' => (float) ($cost['crystal'] ?? 0),
+            'deuterium' => (float) ($cost['deuterium'] ?? 0),
+        ];
+    }
+
+    /** Fields the planet can hold (field_max + 5 per Terraformer level). */
+    public function maxFields(array $planet): int
+    {
+        return $this->developments->maxFields(
+            (int) ($planet['planet_field_max'] ?? 0),
+            (int) ($planet['building_terraformer'] ?? 0)
+        );
+    }
+
+    /** Free building fields, less what is already queued. */
+    public function freeFields(array $planet, int $queued = 0): int
+    {
+        return $this->maxFields($planet) - (int) ($planet['planet_field_current'] ?? 0) - $queued;
+    }
+
+    /**
+     * @param  array{metal: float, crystal: float, deuterium: float}  $cost
+     * @param  array{metal?: float, crystal?: float, deuterium?: float}  $reserve
+     */
+    private function canPay(array $cost, array $planet, array $reserve = []): bool
+    {
+        foreach (['metal', 'crystal', 'deuterium'] as $res) {
+            $have = (float) ($planet["planet_{$res}"] ?? 0) - (float) ($reserve[$res] ?? 0);
+            if ($have < $cost[$res]) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function canAfford(int $buildingId, int $currentLevel, array $planet): bool
+    {
+        if ($this->ignoreAffordability) {
+            return true;
+        }
+
+        return $this->canPay($this->price($buildingId, $currentLevel), $planet);
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Buildings
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Cost of the building the brain WANTS next, ignoring what it can afford right now. Null when
+     * there is nothing it can place (full fields) or nothing worth building.
+     *
+     * BotTick uses this as the shipyard reserve: combat spending may only use what is left above it.
+     *
+     * @param  array<string, mixed>  $planet
+     * @param  array<string, mixed>  $user
+     * @param  array<string, mixed>  $ctx  see nextBuilding()
      * @return array{building_id: int, metal: float, crystal: float, deuterium: float}|null
      */
-    public function wantedBuildingCost(array $planet, array $user): ?array
+    public function wantedBuildingCost(array $planet, array $user, array $ctx = []): ?array
     {
         $this->ignoreAffordability = true;
         try {
-            $buildingId = $this->nextBuilding($planet, $user);
+            $buildingId = $this->nextBuilding($planet, $user, $ctx);
         } finally {
             $this->ignoreAffordability = false;
         }
@@ -182,266 +317,419 @@ class BotBrain
             return null;
         }
 
-        $cost = $this->getBuildingCost($buildingId, $this->getBuildingLevel($buildingId, $planet));
-
-        return ['building_id' => $buildingId] + $cost;
+        return ['building_id' => $buildingId] + $this->price($buildingId, $this->getBuildingLevel($buildingId, $planet));
     }
 
     /**
-     * Get the bot's personality.
-     *
      * @param  array<string, mixed>  $user
      */
     public function getPersonality(array $user): string
     {
         $profile = json_decode((string) ($user['bot_profile'] ?? '{}'), true);
+        $personality = is_array($profile) ? ($profile['personality'] ?? 'raider') : 'raider';
 
-        return $profile['personality'] ?? 'raider';
+        return in_array($personality, ['raider', 'balanced', 'turtle', 'passive'], true) ? $personality : 'raider';
     }
 
     /**
-     * Maximum DOIR (in days) before we stop building. Buildings that take
-     * longer than this to pay back are not worth the investment.
-     */
-    private const MAX_DOIR_DAYS = 90.0;
-
-    /**
-     * How many hours of production storage should hold before we upgrade it.
-     * Default 12h — TBot's standard.
-     */
-    private const DEPOSIT_HOURS = 12;
-
-    /**
-     * Decide what building the bot should construct next.
+     * Next building for this planet (or null: nothing affordable worth building / no room).
      *
-     * Full TBot-style priority chain:
-     *   1. Terraformer (skip — bots don't need it)
-     *   2. Energy Source (if energy negative)
-     *   3. Deposits/Storage (hours-based, not %-based)
-     *   4. Facilities (RF, Nanites, Shipyard, Research Lab — with smart gating)
-     *   5. Mines (ROI-based — lowest DOIR first)
-     *   6. Facilities — force pass (any remaining)
+     * Order:
+     *   0. Moons: strict lunar order.
+     *   1. The way out of a full planet: Terraformer, else Nanite (they use the fields held back).
+     *   2. Energy when in deficit (Solar / Fusion; satellites are the shipyard's field-free fix).
+     *   3. Colonisation push: Robot 2 -> Shipyard 4 on the colony yard, Lab to what research needs.
+     *   4. Storage when the next costs will not fit, or storage is full (not when fields are tight).
+     *   5. Facilities: Robot 10, Nanite, Shipyard, Lab (research planet only), cheaper than a mine.
+     *   6. Mines, best payback first.
+     *   7. Facilities again, without the "cheaper than a mine" gate.
      *
      * @param  array<string, mixed>  $planet
      * @param  array<string, mixed>  $user
+     * @param  array{research_planet?: bool, lab_needed?: int, colony_push?: bool, colony_yard?: bool, queued?: int}  $ctx
      */
-    public function nextBuilding(array $planet, array $user): ?int
+    public function nextBuilding(array $planet, array $user, array $ctx = []): ?int
     {
-        // ─── Moon path ─────────────────────────────────────────────
-        // Moons have completely different buildings — route early
+        $this->lastBuildingReason = '';
+
         if ($this->isMoon($planet)) {
             return $this->nextMoonBuilding($planet, $user);
         }
 
         $personality = $this->getPersonality($user);
-        $weights = self::BUILDING_WEIGHTS[$personality] ?? self::BUILDING_WEIGHTS['raider'];
+        $weights = self::BUILDING_WEIGHTS[$personality];
+        $isResearchPlanet = (bool) ($ctx['research_planet'] ?? true);
 
-        // ─── 1. Energy Source ───────────────────────────────────────
-        // Energy is NEVER deferred to research — it's a prerequisite for everything.
-        // Negative energy throttles mine production, starving the bot of resources.
-        if ($this->isEnergyNegative($planet)) {
-            // Try Solar Plant first
-            $solarLevel = (int) ($planet['building_solar_plant'] ?? 0);
-            if ($solarLevel < 30 && $this->canAfford(Buildings::BUILDING_SOLAR_PLANT, $solarLevel, $planet)) {
-                return Buildings::BUILDING_SOLAR_PLANT;
+        // ─── Fields ──────────────────────────────────────────────────────────
+        $free = $this->freeFields($planet, (int) ($ctx['queued'] ?? 0));
+        $nanite = (int) ($planet['building_nano_factory'] ?? 0);
+        $terraformer = (int) ($planet['building_terraformer'] ?? 0);
+        $heldBack = ($nanite === 0 ? self::RESERVED_FIELDS_NANITE : 0)
+            + ($terraformer === 0 ? self::RESERVED_FIELDS_TERRAFORMER : 0);
+        $usable = $free - $heldBack;
+
+        if ($free <= 0) {
+            $this->lastBuildingReason = 'fields full';
+            return null;
+        }
+
+        // ─── 1. The way out: Terraformer, then Nanite ────────────────────────
+        if ($usable <= 2) {
+            if ($terraformer < self::BUILDING_CAPS[Buildings::BUILDING_TERRAFORMER]
+                && $this->allowed(Buildings::BUILDING_TERRAFORMER, $planet, $user)
+            ) {
+                $this->lastBuildingReason = 'terraformer (fields tight)';
+                $pick = $this->saveOrFix(Buildings::BUILDING_TERRAFORMER, $terraformer, $planet, $user);
+                if ($pick !== self::FALL_THROUGH) {
+                    return $pick;
+                }
             }
 
-            // Solar too expensive — try Fusion Reactor (cheaper, more energy, costs deut)
-            // Fusion requires Energy Tech 3 (standard OGame prerequisite)
-            $energyTech = (int) ($user['research_energy_technology'] ?? 0);
-            if ($energyTech >= 3) {
-                $fusionLevel = (int) ($planet['building_fusion_reactor'] ?? 0);
-                if ($fusionLevel < 30 && $this->canAfford(Buildings::BUILDING_FUSION_REACTOR, $fusionLevel, $planet)) {
-                    return Buildings::BUILDING_FUSION_REACTOR;
+            if ($nanite === 0 && $this->allowed(Buildings::BUILDING_NANO_FACTORY, $planet, $user)) {
+                $this->lastBuildingReason = 'nanite (fields tight)';
+                $pick = $this->saveOrFix(Buildings::BUILDING_NANO_FACTORY, 0, $planet, $user);
+                if ($pick !== self::FALL_THROUGH) {
+                    return $pick;
                 }
             }
         }
 
-        // ─── 2. Deposits/Storage (hours-based) ──────────────────────
-        // Skip deposits in early game (OptimizeForStart)
-        if (!$this->isEarlyGame($planet)) {
-            $deposit = $this->getNextDeposit($planet);
+        if ($usable <= 0) {
+            // Only the held-back fields are left and the Terraformer is not researched yet: the
+            // research ladder is working towards Energy 12 / Computer 10; build nothing, save nothing.
+            $this->lastBuildingReason = 'fields held for nanite/terraformer';
+            return null;
+        }
+
+        $tight = $usable < self::TIGHT_FIELDS;
+
+        // Robot Factory 10 is on the road to Nanite: finish it before the fields run out
+        if ($tight) {
+            $robot = (int) ($planet['building_robot_factory'] ?? 0);
+            if ($robot < 10 && $this->canAfford(Buildings::BUILDING_ROBOT_FACTORY, $robot, $planet)) {
+                $this->lastBuildingReason = 'robot factory (road to nanite)';
+                return Buildings::BUILDING_ROBOT_FACTORY;
+            }
+        }
+
+        // ─── 2. Energy ───────────────────────────────────────────────────────
+        if ($this->isEnergyNegative($planet) && !$tight) {
+            $energy = $this->nextEnergyBuilding($planet, $user);
+            if ($energy !== null) {
+                $this->lastBuildingReason = 'energy';
+                return $energy;
+            }
+        }
+
+        // ─── 2b. Income gap: the research / colony ship being saved for needs a resource this
+        // planet does not produce at all (a fresh planet has no Deuterium Synthesizer) ───────
+        foreach (['metal', 'crystal', 'deuterium'] as $res) {
+            $need = (float) ($ctx["need_{$res}"] ?? 0);
+            if ($need > (float) ($planet["planet_{$res}"] ?? 0) && $this->hourly($planet, $res) <= 0) {
+                $mine = self::MINE_FOR[$res];
+                $level = $this->getBuildingLevel($mine, $planet);
+                if ($level < self::BUILDING_CAPS[$mine] && $this->canAfford($mine, $level, $planet)) {
+                    $this->lastBuildingReason = "no {$res} income";
+                    return $mine;
+                }
+            }
+        }
+
+        // ─── 2c. Storage too small for what the planet saves for (research / colony ship) ──
+        foreach (self::STORE_FOR as $res => $store) {
+            $need = (float) ($ctx["need_{$res}"] ?? 0);
+            $level = $this->getBuildingLevel($store, $planet);
+            if ($need > 0.95 * $this->productionService->maxStorable($level)
+                && $level < self::BUILDING_CAPS[$store] && $this->canAfford($store, $level, $planet)
+            ) {
+                $this->lastBuildingReason = "{$res} storage for what research needs";
+                return $store;
+            }
+        }
+
+        // ─── 3. Colonisation push + the Lab research needs ───────────────────
+        $mineStart = (int) ($planet['building_metal_mine'] ?? 0) >= 5 && (int) ($planet['building_crystal_mine'] ?? 0) >= 3;
+
+        if ($mineStart && (bool) ($ctx['colony_push'] ?? false) && (bool) ($ctx['colony_yard'] ?? false)) {
+            foreach ([Buildings::BUILDING_ROBOT_FACTORY => 2, Buildings::BUILDING_HANGAR => 4] as $facility => $target) {
+                $level = $this->getBuildingLevel($facility, $planet);
+                if ($level < $target && $this->allowed($facility, $planet, $user)) {
+                    $this->lastBuildingReason = 'colony push';
+                    $pick = $this->saveOrFix($facility, $level, $planet, $user);
+                    if ($pick !== self::FALL_THROUGH) {
+                        return $pick;
+                    }
+                    break;
+                }
+            }
+        }
+
+        $labNeeded = (int) ($ctx['lab_needed'] ?? 0);
+        $lab = (int) ($planet['building_laboratory'] ?? 0);
+        if ($mineStart && $isResearchPlanet && $lab < $labNeeded) {
+            $this->lastBuildingReason = "lab {$labNeeded} for research";
+            $pick = $this->saveOrFix(Buildings::BUILDING_LABORATORY, $lab, $planet, $user);
+            if ($pick !== self::FALL_THROUGH) {
+                return $pick;
+            }
+        }
+
+        // ─── 4. Storage ──────────────────────────────────────────────────────
+        if (!$tight && !$this->isEarlyGame($planet)) {
+            $deposit = $this->getNextDeposit($planet, $ctx);
             if ($deposit !== null) {
+                $this->lastBuildingReason = 'storage';
                 return $deposit;
             }
         }
 
-        // ─── 3. Facilities (smart gating) ───────────────────────────
-        // Facilities are infrastructure — they unlock ships, research, construction speed.
-        // Never deferred to research; the smart gate already ensures they're cost-effective.
-        $facility = $this->getNextFacility($planet, $user, $weights);
+        // ─── 5. Facilities (cheaper than the next mine) ──────────────────────
+        $facility = $this->getNextFacility($planet, $user, $weights, $isResearchPlanet, $tight, true);
         if ($facility !== null) {
+            $this->lastBuildingReason = 'facility';
             return $facility;
         }
 
-        // ─── 4. Mines (ROI-based, lowest DOIR first) ────────────────
-        $mine = $this->getNextMine($planet, $weights);
+        // ─── 6. Mines ────────────────────────────────────────────────────────
+        $mine = $this->getNextMine($planet, $user, $this->weightsForNeeds($weights, $planet, $ctx));
         if ($mine !== null) {
-            // Research deferral: if research is a better investment, skip building
-            // and save resources. Energy and deposits already handled above.
-            if ($this->shouldDeferToResearch($mine, $planet, $user)) {
-                return null;
-            }
+            $this->lastBuildingReason = 'mine';
             return $mine;
         }
 
-        // ─── 5. Facilities — force pass (any remaining) ─────────────
-        // Never deferred — these are prerequisites the bot needs.
-        return $this->getNextFacilityForce($planet, $user, $weights);
+        // ─── 7. Facilities without the gate, then energy for the next mines ──
+        $facility = $this->getNextFacility($planet, $user, $weights, $isResearchPlanet, $tight, false);
+        if ($facility !== null) {
+            $this->lastBuildingReason = 'facility (force)';
+            return $facility;
+        }
+
+        if (!$tight) {
+            $energy = $this->nextEnergyBuilding($planet, $user);
+            if ($energy !== null && $this->energySurplus($planet) < 0.1 * max(1, (int) ($planet['planet_energy_max'] ?? 0))) {
+                $this->lastBuildingReason = 'energy headroom';
+                return $energy;
+            }
+        }
+
+        $this->lastBuildingReason = 'nothing affordable';
+        return null;
     }
 
-    // ─── Building Decision Helpers ──────────────────────────────────
-
     /**
-     * Check whether building should be deferred in favour of research.
+     * A full planet (0 free fields) whose way out is allowed right now (Terraformer, or Nanite when
+     * it is missing) demolishes one level of the building it misses least, so the way out has a
+     * field. Returns the building to tear down (queue it in 'destroy' mode) or null.
      *
-     * Compares the next research DOIR against the candidate building DOIR.
-     * If research is a better investment (lower DOIR), the bot skips building
-     * and lets resources accumulate for the research instead.
+     * Needed for planets that filled up before Phase 2 held two fields back: on 30 Sep 317 of 365
+     * live homes sat at exactly 0 free fields, so even with Energy 12 the Terraformer could never
+     * have been placed.
      *
-     * This prevents the building system from perpetually spending resources
-     * that should be saved for critical tech like Impulse Drive (gateway to colonies).
+     * @param  array{research_planet?: bool}  $ctx
      */
-    private function shouldDeferToResearch(int $buildingId, array $planet, array $user): bool
+    public function nextDemolition(array $planet, array $user, array $ctx = []): ?int
     {
-        $researchId = $this->nextResearch($user);
-
-        if ($researchId === null) {
-            return false; // Nothing to research — don't defer
+        if ($this->isMoon($planet) || $this->freeFields($planet) > 0) {
+            return null;
         }
 
-        // CRITICAL: Only defer if the bot can actually AFFORD the research.
-        // Otherwise we get a deadlock: defer building → save resources →
-        // can't afford research → resources idle → repeat forever.
-        $researchLevel = (int) ($user['research_' . $this->getResearchColumn($researchId)] ?? 0);
-        $researchCost = $this->getResearchCost($researchId, $researchLevel);
-        if ($researchCost === null) {
-            return false;
+        $terraformer = (int) ($planet['building_terraformer'] ?? 0);
+        $wayOut = ($terraformer < self::BUILDING_CAPS[Buildings::BUILDING_TERRAFORMER]
+                && $this->allowed(Buildings::BUILDING_TERRAFORMER, $planet, $user))
+            || ((int) ($planet['building_nano_factory'] ?? 0) === 0 && $this->allowed(Buildings::BUILDING_NANO_FACTORY, $planet, $user));
+
+        if (!$wayOut) {
+            return null;
         }
 
-        $metal = (float) ($planet['planet_metal'] ?? 0);
-        $crystal = (float) ($planet['planet_crystal'] ?? 0);
-        $deuterium = (float) ($planet['planet_deuterium'] ?? 0);
+        $candidates = [Buildings::BUILDING_MISSILE_SILO, Buildings::BUILDING_ALLY_DEPOSIT];
+        if (!(bool) ($ctx['research_planet'] ?? true)) {
+            $candidates[] = Buildings::BUILDING_LABORATORY;
+        }
+        $candidates = array_merge($candidates, [
+            Buildings::BUILDING_DEUTERIUM_TANK, Buildings::BUILDING_CRYSTAL_STORE, Buildings::BUILDING_METAL_STORE,
+        ]);
 
-        $canAffordResearch = $metal >= $researchCost['metal']
-            && $crystal >= $researchCost['crystal']
-            && $deuterium >= $researchCost['deuterium'];
+        $ionTech = (int) ($user['research_ionic_technology'] ?? 0);
+        foreach ($candidates as $id) {
+            $level = $this->getBuildingLevel($id, $planet);
+            if ($level < 1) {
+                continue;
+            }
 
-        if (!$canAffordResearch) {
-            return false; // Can't afford research — keep building instead
+            $cost = $this->developments->developmentPrice($id, $level, true, true, $ionTech);
+            $cost = [
+                'metal' => (float) ($cost['metal'] ?? 0),
+                'crystal' => (float) ($cost['crystal'] ?? 0),
+                'deuterium' => (float) ($cost['deuterium'] ?? 0),
+            ];
+            if ($this->canPay($cost, $planet)) {
+                $this->lastBuildingReason = 'demolish for the way out';
+                return $id;
+            }
         }
 
-        $buildingLevel = $this->getBuildingLevel($buildingId, $planet);
-        $buildingDoir = ROICalculator::calcBuildingDOIR($planet, $buildingId, $buildingLevel);
-        $researchDoir = ROICalculator::calcResearchDOIR($user, $planet, $researchId);
-
-        // Research wins if it has a lower (better) DOIR
-        return $researchDoir < $buildingDoir;
+        return null;
     }
 
-    // ─── Moon Building Logic ──────────────────────────────────────
+    /** Mine that produces each resource. */
+    private const MINE_FOR = [
+        'metal' => Buildings::BUILDING_METAL_MINE,
+        'crystal' => Buildings::BUILDING_CRYSTAL_MINE,
+        'deuterium' => Buildings::BUILDING_DEUTERIUM_SINTETIZER,
+    ];
+
+    /** Storage for each resource. */
+    private const STORE_FOR = [
+        'metal' => Buildings::BUILDING_METAL_STORE,
+        'crystal' => Buildings::BUILDING_CRYSTAL_STORE,
+        'deuterium' => Buildings::BUILDING_DEUTERIUM_TANK,
+    ];
 
     /**
-     * Check if this planet is a moon (planet_type = 3).
+     * A building the planet must save for: return it if affordable; if it can never be paid as
+     * things stand, return what fixes that (storage too small for the price: that storage; no
+     * income of a needed resource: that mine); if the income would take longer than
+     * MAX_SAVE_HOURS, FALL_THROUGH (don't block on it); otherwise null = keep saving.
      *
-     * @param  array<string, mixed>  $planet
+     * The fresh-universe simulation (30 Sep) deadlocked every new bot on Robot Factory 1: it
+     * costs 200 deuterium and no new planet has a Deuterium Synthesizer, so "save for it" was
+     * for ever. Storage caps (12,500 at level 0) make the same trap for Lab 7 / Shipyard 6.
+     *
+     * @return int|null  building id, null (save), or FALL_THROUGH
      */
-    private function isMoon(array $planet): bool
+    private function saveOrFix(int $id, int $level, array $planet, array $user): ?int
     {
-        return ((int) ($planet['planet_type'] ?? 1)) === 3;
+        $cost = $this->price($id, $level);
+
+        if ($this->canPay($cost, $planet)) {
+            return $id;
+        }
+
+        $slowest = 0.0;
+        foreach (['metal', 'crystal', 'deuterium'] as $res) {
+            $have = (float) ($planet["planet_{$res}"] ?? 0);
+            if ($cost[$res] <= $have) {
+                continue;
+            }
+
+            // Price bigger than what storage holds: grow the storage first
+            $store = self::STORE_FOR[$res];
+            $storeLevel = $this->getBuildingLevel($store, $planet);
+            if ($cost[$res] > 0.98 * $this->productionService->maxStorable($storeLevel)) {
+                if ($storeLevel < self::BUILDING_CAPS[$store] && $this->freeFields($planet) > 0) {
+                    $this->lastBuildingReason .= " -> {$res} storage first";
+                    return $this->canAfford($store, $storeLevel, $planet) ? $store : null;
+                }
+                return self::FALL_THROUGH;
+            }
+
+            // No income of this resource at all: build its mine first
+            if ($this->hourly($planet, $res) <= 0) {
+                $mine = self::MINE_FOR[$res];
+                $mineLevel = $this->getBuildingLevel($mine, $planet);
+                if ($mineLevel < self::BUILDING_CAPS[$mine] && $this->freeFields($planet) > 0) {
+                    $this->lastBuildingReason .= " -> {$res} mine first";
+                    return $this->canAfford($mine, $mineLevel, $planet) ? $mine : null;
+                }
+                return self::FALL_THROUGH;
+            }
+
+            $slowest = max($slowest, ($cost[$res] - $have) / $this->hourly($planet, $res));
+        }
+
+        if ($slowest > self::MAX_SAVE_HOURS) {
+            return self::FALL_THROUGH;
+        }
+
+        return $this->ignoreAffordability ? $id : null;
+    }
+
+    /** The planet's hourly income of a resource (the game keeps it on the planet row). */
+    private function hourly(array $planet, string $res): float
+    {
+        return (float) ($planet["planet_{$res}_perhour"] ?? 0);
+    }
+
+    /** Solar until level 20, then Fusion when the game allows it (Deut 5 + Energy 3), else Solar. */
+    private function nextEnergyBuilding(array $planet, array $user): ?int
+    {
+        $solar = (int) ($planet['building_solar_plant'] ?? 0);
+        $fusion = (int) ($planet['building_fusion_reactor'] ?? 0);
+        $fusionOk = $fusion < self::BUILDING_CAPS[Buildings::BUILDING_FUSION_REACTOR]
+            && $this->allowed(Buildings::BUILDING_FUSION_REACTOR, $planet, $user);
+
+        $order = $solar >= 20 && $fusionOk
+            ? [Buildings::BUILDING_FUSION_REACTOR, Buildings::BUILDING_SOLAR_PLANT]
+            : [Buildings::BUILDING_SOLAR_PLANT, Buildings::BUILDING_FUSION_REACTOR];
+
+        foreach ($order as $id) {
+            $level = $this->getBuildingLevel($id, $planet);
+            if ($level >= self::BUILDING_CAPS[$id]) {
+                continue;
+            }
+            if ($id === Buildings::BUILDING_FUSION_REACTOR && !$fusionOk) {
+                continue;
+            }
+            if ($this->canAfford($id, $level, $planet)) {
+                return $id;
+            }
+        }
+
+        return null;
     }
 
     /**
-     * Decide what to build next on a moon.
-     *
-     * Moons are strategic assets — Sensor Phalanx lets you spy on neighbors'
-     * fleet movements, Jump Gate enables instant fleet deployment. High priority
-     * for dominating a local area.
-     *
-     * Moon buildings are sequential (no ROI calculation needed):
-     *   Lunar Base → Robot Factory → Sensor Phalanx → Missile Silo → Jump Gate
-     *
-     * @param  array<string, mixed>  $planet
-     * @param  array<string, mixed>  $user
+     * Next moon building: strict order, but skip what the moon may never have.
      */
     private function nextMoonBuilding(array $planet, array $user): ?int
     {
         foreach (self::MOON_BUILDING_PRIORITY as $buildingId => $config) {
             $level = $this->getBuildingLevel($buildingId, $planet);
-            $cap = $config['cap'];
 
-            if ($level >= $cap) {
+            if ($level >= $config['cap']) {
                 continue;
             }
 
-            // Check Robot Factory prerequisite for Sensor Phalanx / Jump Gate
-            if ($config['min_rf'] > 0) {
-                $rfLevel = $this->getBuildingLevel(Buildings::BUILDING_ROBOT_FACTORY, $planet);
-                if ($rfLevel < $config['min_rf']) {
-                    continue;
-                }
+            if (!$this->allowed($buildingId, $planet, $user)) {
+                continue; // e.g. Jump Gate before Hyperspace Tech 7 — skip, don't freeze the moon
             }
 
-            // Prerequisites: Sensor Phalanx needs Lunar Base >= 1, Jump Gate needs Lunar Base >= 1
-            if ($buildingId === Buildings::BUILDING_PHALANX || $buildingId === Buildings::BUILDING_JUMP_GATE) {
-                $lunarBaseLevel = $this->getBuildingLevel(Buildings::BUILDING_MONDBASIS, $planet);
-                if ($lunarBaseLevel < 1) {
-                    continue;
-                }
-            }
-
-            // Missile Silo needs Lunar Base >= 1 too
-            if ($buildingId === Buildings::BUILDING_MISSILE_SILO) {
-                $lunarBaseLevel = $this->getBuildingLevel(Buildings::BUILDING_MONDBASIS, $planet);
-                if ($lunarBaseLevel < 1) {
-                    continue;
-                }
-            }
-
-            // Jump Gate needs Lunar Base >= 1 AND Robot Factory >= 1
-            if ($buildingId === Buildings::BUILDING_JUMP_GATE) {
-                $rfLevel = $this->getBuildingLevel(Buildings::BUILDING_ROBOT_FACTORY, $planet);
-                if ($rfLevel < 1) {
-                    continue;
-                }
+            if ($this->freeFields($planet) <= 0 && $buildingId !== Buildings::BUILDING_MONDBASIS) {
+                continue;
             }
 
             if ($this->canAfford($buildingId, $level, $planet)) {
                 return $buildingId;
             }
 
-            // Can't afford this one — still the right priority, just wait for resources
-            // Don't skip to a cheaper building; moons should build in strict order
-            return null;
+            return null; // right priority, wait for resources
         }
 
-        // All moon buildings maxed — nothing to build
         return null;
     }
 
+    private function isMoon(array $planet): bool
+    {
+        return ((int) ($planet['planet_type'] ?? 1)) === 3;
+    }
+
     /**
-     * Check if planet has negative energy (need more solar/fusion).
-     *
-     * Game convention (UpdatesLibrary / ProductionService::maxProductionPercentage):
-     * planet_energy_max  = production (solar + fusion + satellites), positive
-     * planet_energy_used = consumption, stored NEGATIVE
-     * Net energy = max + used. Deficit when net < 0.
+     * Energy: planet_energy_max = production (positive), planet_energy_used = consumption, stored
+     * NEGATIVE. Net = max + used; deficit when net < 0.
      */
     public function isEnergyNegative(array $planet): bool
     {
         return $this->energyDeficit($planet) > 0;
     }
 
-    /**
-     * How much energy the planet is short by (0 when in surplus).
-     */
     public function energyDeficit(array $planet): int
     {
         $energyMax = (int) ($planet['planet_energy_max'] ?? 0);
         $energyUsed = (int) ($planet['planet_energy_used'] ?? 0);
 
-        if ($energyMax <= 0) {
-            return 0; // No production at all (moon / fresh planet) — nothing to fix
+        if ($energyMax <= 0 && $energyUsed === 0) {
+            return 0; // moon / nothing built yet
         }
 
         $net = $energyMax + $energyUsed;
@@ -449,9 +737,12 @@ class BotBrain
         return $net < 0 ? -$net : 0;
     }
 
-    /**
-     * Energy one Solar Satellite gives on this planet (GameObjectRegistry formula).
-     */
+    private function energySurplus(array $planet): int
+    {
+        return (int) ($planet['planet_energy_max'] ?? 0) + (int) ($planet['planet_energy_used'] ?? 0);
+    }
+
+    /** Energy one Solar Satellite gives here (GameObjectRegistry formula). */
     public function satelliteEnergy(array $planet): int
     {
         $temp = (float) ($planet['planet_temp_max'] ?? 0);
@@ -459,45 +750,40 @@ class BotBrain
         return max(1, (int) floor(($temp + 140) / 6));
     }
 
-    /**
-     * Check if planet is in early game — skip deposits if mines are low.
-     * TBot OptimizeForStart: skip deposits until mines reach ~12/12/10.
-     */
+    /** Early game = storage not worth a field yet (TBot OptimizeForStart). */
     private function isEarlyGame(array $planet): bool
     {
-        $metal = (int) ($planet['building_metal_mine'] ?? 0);
-        $crystal = (int) ($planet['building_crystal_mine'] ?? 0);
-        $deut = (int) ($planet['building_deuterium_sintetizer'] ?? 0);
-        $solar = (int) ($planet['building_solar_plant'] ?? 0);
-        $fusion = (int) ($planet['building_fusion_reactor'] ?? 0);
-        $rf = (int) ($planet['building_robot_factory'] ?? 0);
-        $hangar = (int) ($planet['building_hangar'] ?? 0);
-        $lab = (int) ($planet['building_laboratory'] ?? 0);
-
-        return $metal < 13 && $crystal < 12 && $deut < 10
-            && $solar < 13 && $fusion < 5 && $rf < 5
-            && $hangar < 5 && $lab < 5;
+        return (int) ($planet['building_metal_mine'] ?? 0) < 12
+            && (int) ($planet['building_crystal_mine'] ?? 0) < 10;
     }
 
     /**
-     * Get the next deposit/storage to build (hours-based logic).
-     *
-     * Only builds storage when current capacity can't hold DEPOSIT_HOURS
-     * worth of production, OR when storage is literally full (forceIfFull).
+     * Storage: build when it is full, when it can't hold DEPOSIT_HOURS of production, or when the
+     * cost the planet is saving for (ctx 'need_*') won't fit.
      */
-    private function getNextDeposit(array $planet): ?int
+    private function getNextDeposit(array $planet, array $ctx): ?int
     {
-        $order = [
-            Buildings::BUILDING_DEUTERIUM_TANK,
-            Buildings::BUILDING_CRYSTAL_STORE,
-            Buildings::BUILDING_METAL_STORE,
+        $map = [
+            Buildings::BUILDING_DEUTERIUM_TANK => ['planet_deuterium', 'deuterium', Buildings::BUILDING_DEUTERIUM_SINTETIZER],
+            Buildings::BUILDING_CRYSTAL_STORE  => ['planet_crystal', 'crystal', Buildings::BUILDING_CRYSTAL_MINE],
+            Buildings::BUILDING_METAL_STORE    => ['planet_metal', 'metal', Buildings::BUILDING_METAL_MINE],
         ];
 
-        foreach ($order as $storageId) {
+        foreach ($map as $storageId => [$column, $res, $mineId]) {
             $level = $this->getBuildingLevel($storageId, $planet);
-            if ($level >= 20) continue;
+            if ($level >= self::BUILDING_CAPS[$storageId]) {
+                continue;
+            }
 
-            if ($this->shouldBuildDeposit($storageId, $planet) && $this->canAfford($storageId, $level, $planet)) {
+            $capacity = $this->productionService->maxStorable($level);
+            $hourly = ROICalculator::calcBuildingHourlyProduction($planet, $mineId);
+            $need = (float) ($ctx["need_{$res}"] ?? 0);
+
+            $wanted = (float) ($planet[$column] ?? 0) >= $capacity * 0.98
+                || $capacity < self::DEPOSIT_HOURS * $hourly
+                || $need > $capacity * 0.95;
+
+            if ($wanted && $this->canAfford($storageId, $level, $planet)) {
                 return $storageId;
             }
         }
@@ -506,104 +792,37 @@ class BotBrain
     }
 
     /**
-     * TBot-style deposit check: build if capacity < DEPOSIT_HOURS * hourly production
-     * OR if resource is literally full (forceIfFull).
+     * Facilities: Robot Factory, Nanite, Shipyard, Lab (research planet only).
+     * $gated: only when cheaper than the next mine (and paying back inside MAX_DOIR_DAYS).
      */
-    private function shouldBuildDeposit(int $storageId, array $planet): bool
-    {
-        $map = [
-            Buildings::BUILDING_METAL_STORE    => ['resource' => 'planet_metal',      'prod' => 'metal'],
-            Buildings::BUILDING_CRYSTAL_STORE  => ['resource' => 'planet_crystal',    'prod' => 'crystal'],
-            Buildings::BUILDING_DEUTERIUM_TANK => ['resource' => 'planet_deuterium',  'prod' => 'deuterium'],
-        ];
-
-        $config = $map[$storageId] ?? null;
-        if ($config === null) return false;
-
-        $level = $this->getBuildingLevel($storageId, $planet);
-        $capacity = $this->calcStorageCapacity($level);
-        $hourlyProd = $this->calcHourlyProduction($planet, $config['prod']);
-        $current = (float) ($planet[$config['resource']] ?? 0);
-
-        // forceIfFull: storage is literally overflowing
-        if ($current >= $capacity) {
-            return true;
-        }
-
-        // DepositHours: capacity can't hold N hours of production
-        if ($capacity < self::DEPOSIT_HOURS * $hourlyProd) {
-            return true;
-        }
-
-        return false;
-    }
-
-    /**
-     * Calculate storage capacity for a given level.
-     * OGame formula: 5000 * floor(2.5 * e^(20*level/33))
-     */
-    private function calcStorageCapacity(int $level): float
-    {
-        return $this->productionService->maxStorable($level);
-    }
-
-    /**
-     * Calculate approximate hourly resource production.
-     */
-    private function calcHourlyProduction(array $planet, string $resource): float
-    {
-        return match ($resource) {
-            'metal' => ROICalculator::calcBuildingHourlyProduction($planet, Buildings::BUILDING_METAL_MINE),
-            'crystal' => ROICalculator::calcBuildingHourlyProduction($planet, Buildings::BUILDING_CRYSTAL_MINE),
-            'deuterium' => ROICalculator::calcBuildingHourlyProduction($planet, Buildings::BUILDING_DEUTERIUM_SINTETIZER),
-            default => 0,
-        };
-    }
-
-    // ─── Facility Selection ─────────────────────────────────────────
-
-    /**
-     * Get the next facility to build (smart gating).
-     *
-     * Robot Factory → Nanites → Shipyard → Research Lab — in order.
-     * Only builds if: prereqs met, not at cap, and cheaper than next mine.
-     */
-    private function getNextFacility(array $planet, array $user, array $weights): ?int
+    private function getNextFacility(array $planet, array $user, array $weights, bool $isResearchPlanet, bool $tight, bool $gated): ?int
     {
         $caps = [
             Buildings::BUILDING_ROBOT_FACTORY => 10,
-            Buildings::BUILDING_NANO_FACTORY  => 5,
-            Buildings::BUILDING_HANGAR        => 12,
-            Buildings::BUILDING_LABORATORY    => 12,
+            Buildings::BUILDING_NANO_FACTORY  => self::BUILDING_CAPS[Buildings::BUILDING_NANO_FACTORY],
+            Buildings::BUILDING_HANGAR        => $tight ? 8 : 12,
+            Buildings::BUILDING_LABORATORY    => $isResearchPlanet ? 12 : 0, // colonies don't research
         ];
 
-        $priority = [
-            Buildings::BUILDING_ROBOT_FACTORY,
-            Buildings::BUILDING_NANO_FACTORY,
-            Buildings::BUILDING_HANGAR,
-            Buildings::BUILDING_LABORATORY,
-        ];
+        $nextMineCost = $gated ? $this->getCheapestMineCost($planet, $weights) : 0.0;
 
-        foreach ($priority as $facilityId) {
+        foreach ($caps as $facilityId => $cap) {
             $level = $this->getBuildingLevel($facilityId, $planet);
-            $cap = $caps[$facilityId] ?? 20;
 
-            if ($level >= $cap) continue;
-
-            // Check prerequisites
-            if (!$this->meetsBuildingPrerequisites($facilityId, $planet, $user)) continue;
-
-            // Smart gate: only build if cheaper than the next mine
-            $facilityCost = $this->getBuildingCostTotal($facilityId, $level);
-            $nextMineCost = $this->getCheapestMineCost($planet, $weights);
-
-            if ($facilityCost > $nextMineCost && $nextMineCost > 0) {
-                continue; // Facility is more expensive than next mine — build mine first
+            if ($level >= $cap) {
+                continue;
+            }
+            if (!$this->allowed($facilityId, $planet, $user)) {
+                continue;
             }
 
-            // Check DOIR cap
-            $doir = ROICalculator::calcBuildingDOIR($planet, $facilityId, $level);
-            if ($doir > self::MAX_DOIR_DAYS) continue;
+            if ($gated) {
+                $cost = $this->price($facilityId, $level);
+                $total = $cost['metal'] + $cost['crystal'] + $cost['deuterium'];
+                if ($nextMineCost > 0 && $total > $nextMineCost) {
+                    continue;
+                }
+            }
 
             if ($this->canAfford($facilityId, $level, $planet)) {
                 return $facilityId;
@@ -614,93 +833,46 @@ class BotBrain
     }
 
     /**
-     * Get the next facility in force mode (skip the smart gate).
-     * Used as fallback when no mine is buildable.
+     * Personality mine weights, with the resource that research / the colony ship is waiting on
+     * tripled. The sim showed 207 of 365 fresh bots with research waiting on deuterium while the
+     * Deuterium Synthesizer ranked last (weight 0.7).
+     *
+     * @param  array<int, float>  $weights
+     * @return array<int, float>
      */
-    private function getNextFacilityForce(array $planet, array $user, array $weights): ?int
+    private function weightsForNeeds(array $weights, array $planet, array $ctx): array
     {
-        $caps = [
-            Buildings::BUILDING_ROBOT_FACTORY => 10,
-            Buildings::BUILDING_NANO_FACTORY  => 5,
-            Buildings::BUILDING_HANGAR        => 12,
-            Buildings::BUILDING_LABORATORY    => 12,
-            Buildings::BUILDING_SOLAR_PLANT   => 30,
-        ];
-
-        $priority = [
-            Buildings::BUILDING_ROBOT_FACTORY,
-            Buildings::BUILDING_NANO_FACTORY,
-            Buildings::BUILDING_HANGAR,
-            Buildings::BUILDING_LABORATORY,
-            Buildings::BUILDING_SOLAR_PLANT,
-        ];
-
-        foreach ($priority as $buildingId) {
-            $level = $this->getBuildingLevel($buildingId, $planet);
-            $cap = $caps[$buildingId] ?? 20;
-
-            if ($level >= $cap) continue;
-            if (!$this->meetsBuildingPrerequisites($buildingId, $planet, $user)) continue;
-
-            if ($this->canAfford($buildingId, $level, $planet)) {
-                return $buildingId;
+        foreach (self::MINE_FOR as $res => $mineId) {
+            if ((float) ($ctx["need_{$res}"] ?? 0) > (float) ($planet["planet_{$res}"] ?? 0)) {
+                $weights[$mineId] = ($weights[$mineId] ?? 1.0) * 3.0;
             }
         }
 
-        return null;
+        return $weights;
     }
 
-    /**
-     * Check building prerequisites (e.g. Shipyard needs Robotics 2, Nanites needs Computer 10).
-     */
-    private function meetsBuildingPrerequisites(int $buildingId, array $planet, array $user): bool
+    /** Next mine by payback time (lowest DOIR / personality weight), within caps and energy. */
+    private function getNextMine(array $planet, array $user, array $weights): ?int
     {
-        return match ($buildingId) {
-            Buildings::BUILDING_HANGAR =>
-                ((int) ($planet['building_robot_factory'] ?? 0)) >= 2,
-            Buildings::BUILDING_NANO_FACTORY =>
-                ((int) ($planet['building_robot_factory'] ?? 0)) >= 10
-                && ((int) ($user['research_computer_technology'] ?? 0)) >= 10,
-            Buildings::BUILDING_TERRAFORMER =>
-                ((int) ($user['research_energy_technology'] ?? 0)) >= 12,
-            default => true, // No prereq
-        };
-    }
-
-    // ─── Mine Selection (ROI-based) ─────────────────────────────────
-
-    /**
-     * Get the next mine to build using ROI — lowest DOIR wins.
-     */
-    private function getNextMine(array $planet, array $weights): ?int
-    {
-        $mineIds = [
-            Buildings::BUILDING_METAL_MINE,
-            Buildings::BUILDING_CRYSTAL_MINE,
-            Buildings::BUILDING_DEUTERIUM_SINTETIZER,
-        ];
-
-        $caps = [
-            Buildings::BUILDING_METAL_MINE        => 30,
-            Buildings::BUILDING_CRYSTAL_MINE       => 30,
-            Buildings::BUILDING_DEUTERIUM_SINTETIZER => 30,
-        ];
-
         $bestMine = null;
         $bestScore = PHP_FLOAT_MAX;
 
-        foreach ($mineIds as $mineId) {
+        foreach ([Buildings::BUILDING_METAL_MINE, Buildings::BUILDING_CRYSTAL_MINE, Buildings::BUILDING_DEUTERIUM_SINTETIZER] as $mineId) {
             $level = $this->getBuildingLevel($mineId, $planet);
-            $cap = $caps[$mineId] ?? 30;
 
-            if ($level >= $cap) continue;
-            if (!$this->canAfford($mineId, $level, $planet)) continue;
+            if ($level >= self::BUILDING_CAPS[$mineId]) {
+                continue;
+            }
+            if (!$this->canAfford($mineId, $level, $planet)) {
+                continue;
+            }
 
             $doir = ROICalculator::calcBuildingDOIR($planet, $mineId, $level);
-            if ($doir > self::MAX_DOIR_DAYS) continue;
+            if ($doir > self::MAX_DOIR_DAYS && $level >= 10) {
+                continue;
+            }
 
-            $weight = $weights[$mineId] ?? 1.0;
-            $score = $doir / $weight;
+            $score = $doir / ($weights[$mineId] ?? 1.0);
 
             if ($score < $bestScore) {
                 $bestScore = $score;
@@ -711,222 +883,321 @@ class BotBrain
         return $bestMine;
     }
 
-    /**
-     * Get the cheapest affordable mine upgrade cost.
-     * Used for smart facility gating.
-     */
     private function getCheapestMineCost(array $planet, array $weights): float
     {
-        $cheapest = PHP_FLOAT_MAX;
+        $cheapest = 0.0;
 
-        foreach ([Buildings::BUILDING_METAL_MINE, Buildings::BUILDING_CRYSTAL_MINE, Buildings::BUILDING_DEUTERIUM_SINTETIZER] as $mineId) {
+        foreach (array_keys($weights) as $mineId) {
             $level = $this->getBuildingLevel($mineId, $planet);
-            if ($level >= 30) continue;
-            if (!isset($weights[$mineId]) || $weights[$mineId] <= 0) continue;
+            if ($level >= self::BUILDING_CAPS[$mineId]) {
+                continue;
+            }
 
-            $cost = $this->getBuildingCostTotal($mineId, $level);
-            if ($cost < $cheapest) {
-                $cheapest = $cost;
+            $cost = $this->price($mineId, $level);
+            $total = $cost['metal'] + $cost['crystal'] + $cost['deuterium'];
+            if ($cheapest === 0.0 || $total < $cheapest) {
+                $cheapest = $total;
             }
         }
 
         return $cheapest;
     }
 
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Research
+    // ═════════════════════════════════════════════════════════════════════════
+
     /**
-     * Get total cost (metal + crystal + deut) for a building upgrade.
+     * What to research next on $planet (the research planet) and whether it can be paid now.
+     *
+     * Walks RESEARCH_GOALS; a goal whose requirement is missing turns into that requirement. A
+     * missing Lab level is reported in lab_needed (the building brain builds it) and the walk goes
+     * on to the next goal that can start today. Once the ladder is done, the best DOIR tech
+     * below RESEARCH_CAPS.
+     *
+     * @param  array<string, mixed>  $user
+     * @param  array<string, mixed>  $planet
+     * @return array{id: int, level: int, cost: array{metal: float, crystal: float, deuterium: float}, affordable: bool, lab_needed: int}|null
      */
-    private function getBuildingCostTotal(int $buildingId, int $level): float
+    public function researchPlan(array $user, array $planet): ?array
     {
-        $cost = $this->getBuildingCost($buildingId, $level);
-        return $cost['metal'] + $cost['crystal'] + $cost['deuterium'];
+        $this->lastLabNeeded = 0;
+
+        if ((int) ($user['research_current_research'] ?? 0) > 0) {
+            return null;
+        }
+
+        $levels = $this->levels($planet, $user);
+        $labNeeded = 0;
+        $pick = null;
+        $lookAhead = 0;
+
+        foreach (self::RESEARCH_GOALS as [$techId, $target]) {
+            if (($levels[$techId] ?? 0) >= $target) {
+                continue;
+            }
+
+            // While a goal waits for the Lab, fill the gap with the next few goals only — not
+            // expensive far-off ones that would eat the colonisation money.
+            if ($labNeeded > 0 && ++$lookAhead > self::RESEARCH_LOOKAHEAD) {
+                break;
+            }
+
+            $step = $this->resolveResearch($techId, $levels, 0);
+
+            if ($step['lab'] > 0) {
+                // The FIRST goal blocked by the Lab sets the Lab target (not the highest: a fresh
+                // planet would otherwise build Lab 7 before its first research)
+                if ($labNeeded === 0) {
+                    $labNeeded = $step['lab'];
+                }
+                continue; // try the next goal that can start now
+            }
+
+            if ($step['id'] !== null) {
+                $pick = $step['id'];
+                break;
+            }
+        }
+
+        if ($pick === null && $labNeeded === 0) {
+            $pick = $this->bestDoirResearch($user, $planet, $levels);
+        }
+
+        $this->lastLabNeeded = $labNeeded;
+
+        if ($pick === null) {
+            return null;
+        }
+
+        $level = $levels[$pick] ?? 0;
+        $cost = $this->price($pick, $level);
+
+        return [
+            'id' => $pick,
+            'level' => $level,
+            'cost' => $cost,
+            'affordable' => $this->canPay($cost, $planet),
+            'lab_needed' => $labNeeded,
+        ];
     }
 
     /**
-     * Decide what ship or defense to build in the shipyard.
+     * Follow requirements down to something researchable now.
      *
-     * @param  array<string, mixed>  $planet
-     * @param  array<string, mixed>  $user
-     *
-     * @return array{ship_id: int, count: int}|null
+     * @param  array<int, int>  $levels
+     * @return array{id: int|null, lab: int}
      */
-    /**
-     * Maximum total ships per planet (existing + hangar queue + new request).
-     * Prevents bots from spamming hundreds of cheap ships.
-     */
-    private const SHIP_CAPS = [
-        210 => 30,   // Espionage Probe — 3 probes × 3 spy missions per tick (5 Sep), so 30 in stock
-        401 => 50,   // Rocket Launcher — cap for passive bots
-        402 => 30,   // Light Laser
-        403 => 15,   // Heavy Laser
-        404 => 10,   // Gauss Cannon
-        405 => 5,    // Ion Cannon
-        502 => 3,    // Small Shield Dome
-        212 => 120,  // Solar Satellite — ~32 energy each at 50°C; a 1,200 deficit needs ~40
-        208 => 1,    // Colony Ship — only ever need 1
-        209 => 20,   // Recycler — was 3; a 200K field needs 10 (7 Sep)
-    ];
-
-    /** Below this many probes (owned + queued) a raider/balanced planet restocks before anything else. */
-    private const PROBE_FLOOR = 15;  // was 5; a tick now spends up to 9 probes (3 targets × 3 probes)
-
-    /** Below this many recyclers (owned + queued) a non-passive planet restocks before combat ships. */
-    private const RECYCLER_FLOOR = 10;
-
-    /**
-     * @param  array<string, mixed>  $planet
-     * @param  array<string, mixed>  $user
-     * @param  array{metal?: float, crystal?: float, deuterium?: float}  $reserve  Resources to leave
-     *         untouched for the building the planet is saving for (see wantedBuildingCost()).
-     *         Solar Satellites (energy) and the probe floor ignore it — both are cheap and
-     *         the economy / raiding stops without them.
-     */
-    public function nextShip(array $planet, array $user, array $reserve = []): ?array
+    private function resolveResearch(int $techId, array $levels, int $depth): array
     {
-        $hangarLevel = (int) ($planet['building_hangar'] ?? 0);
+        if ($depth > 8) {
+            return ['id' => null, 'lab' => 0];
+        }
 
-        if ($hangarLevel < 1) {
+        $object = $this->registry->get($techId);
+        foreach ($object->getRequirements() as $reqId => $reqLevel) {
+            $reqId = (int) $reqId;
+            $reqLevel = (int) $reqLevel;
+
+            if (($levels[$reqId] ?? 0) >= $reqLevel) {
+                continue;
+            }
+
+            if ($reqId === Buildings::BUILDING_LABORATORY) {
+                return ['id' => null, 'lab' => $reqLevel];
+            }
+
+            if ($reqId >= 100 && $reqId < 200) {
+                $deeper = $this->resolveResearch($reqId, $levels, $depth + 1);
+                if ($deeper['id'] !== null || $deeper['lab'] > 0) {
+                    return $deeper;
+                }
+            }
+
+            return ['id' => null, 'lab' => 0]; // a building we don't handle here
+        }
+
+        return ['id' => $techId, 'lab' => 0];
+    }
+
+    /** DOIR fallback once the ladder is complete. */
+    private function bestDoirResearch(array $user, array $planet, array $levels): ?int
+    {
+        $best = null;
+        $bestScore = PHP_FLOAT_MAX;
+
+        foreach (self::RESEARCH_CAPS as $techId => $cap) {
+            if (($levels[$techId] ?? 0) >= $cap) {
+                continue;
+            }
+            if (!$this->developments->isDevelopmentAllowed($techId, $levels)) {
+                continue;
+            }
+
+            $doir = ROICalculator::calcResearchDOIR($user, $planet, $techId);
+            if ($doir < $bestScore) {
+                $bestScore = $doir;
+                $best = $techId;
+            }
+        }
+
+        return $best;
+    }
+
+    /**
+     * Research to start NOW (affordable) or null. Kept for callers that only want a yes/no
+     * (the idle ladder's retry).
+     */
+    public function nextResearch(array $user, array $planet = []): ?int
+    {
+        if (empty($planet)) {
+            return null;
+        }
+
+        $plan = $this->researchPlan($user, $planet);
+
+        return $plan !== null && $plan['affordable'] ? $plan['id'] : null;
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Shipyard
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /**
+     * What the shipyard builds this tick.
+     *
+     * Order: satellites (energy deficit) -> colony ship (ctx want_colony_ship) -> probes ->
+     * recyclers -> cargo -> combat/defence (best legal first, a share of the spendable budget).
+     * Everything is checked against the game's requirements: until 30 Sep BotTick wrote ships into
+     * the hangar queue without a check and ThreatAnalyzer's ranks were read as shipyard levels.
+     *
+     * @param  array<string, mixed>  $planet
+     * @param  array<string, mixed>  $user
+     * @param  array{metal?: float, crystal?: float, deuterium?: float}  $reserve  left untouched for the
+     *         building / research / colony ship the planet is saving for (floors below ignore it)
+     * @param  array{want_colony_ship?: bool, economy_first?: bool, main_planet?: bool}  $ctx
+     * @return array{ship_id: int, count: int, cost: array{metal: float, crystal: float, deuterium: float}}|null
+     */
+    public function nextShip(array $planet, array $user, array $reserve = [], array $ctx = []): ?array
+    {
+        if ((int) ($planet['building_hangar'] ?? 0) < 1) {
             return null;
         }
 
         $personality = $this->getPersonality($user);
+        $queue = $this->parseHangarQueue((string) ($planet['planet_b_hangar_id'] ?? ''));
+        $have = fn (int $id): int => (int) ($planet[$this->getShipColumn($id)] ?? 0) + ($queue[$id] ?? 0);
 
-        // ─── Energy first: Solar Satellites are the cheap fix for a deficit ──
-        // (2,000 crystal + 500 deut each vs. 250K+ crystal for the next Solar Plant level).
-        // Replaces the old blanket "no ships while energy is negative" gate.
+        // ─── Satellites: the field-free energy fix ───────────────────────────
+        // Satellites cost 500 deuterium each — early on a Solar Plant level is far cheaper (the sim's
+        // fresh bots bought 363 and starved research of deuterium). Only once Solar is high or the
+        // fields are tight.
         $deficit = $this->energyDeficit($planet);
-        if ($deficit > 0 && !$this->isMoon($planet)) {
-            $hangarQueue = $this->parseHangarQueue($planet['planet_b_hangar_id'] ?? '');
-            $existing = (int) ($planet['ship_solar_satellite'] ?? 0);
-            $queued = $hangarQueue[212] ?? 0;
-            $needed = (int) ceil($deficit / $this->satelliteEnergy($planet)) - $queued;
-            $room = self::SHIP_CAPS[212] - $existing - $queued;
-            $needed = min($needed, $room, 20);
-
-            if ($needed >= 1) {
-                $cost = $this->getShipCost(212);
-                $crystal = (float) ($planet['planet_crystal'] ?? 0);
-                $deuterium = (float) ($planet['planet_deuterium'] ?? 0);
-                $affordable = min(
-                    (int) floor($crystal / $cost['crystal']),
-                    (int) floor($deuterium / $cost['deuterium'])
-                );
-                $count = min($needed, $affordable);
-
-                if ($count >= 1) {
-                    return ['ship_id' => 212, 'count' => $count, 'cost' => $cost];
-                }
+        $solarDear = (int) ($planet['building_solar_plant'] ?? 0) >= 20 || $this->freeFields($planet) <= self::TIGHT_FIELDS + 2;
+        if ($deficit > 0 && $solarDear && !$this->isMoon($planet)) {
+            $needed = (int) ceil($deficit / $this->satelliteEnergy($planet)) - ($queue[212] ?? 0);
+            $needed = min($needed, self::SHIP_CAPS[212] - $have(212), 50);
+            $order = $this->affordableOrder(212, $needed, $planet, $user, []);
+            if ($order !== null) {
+                return $order;
             }
         }
 
-        // ─── Probe floor: raiders/balanced can't spy (or attack) without probes ──
-        // The threat analyser's counter-build list has no probes and every neighbourhood
-        // reads as "medium+" with 365 armed bots, so probes were never restocked.
-        if ($personality !== 'turtle' && $personality !== 'passive') {
-            $hangarQueue = $this->parseHangarQueue($planet['planet_b_hangar_id'] ?? '');
-            $probeTotal = (int) ($planet['ship_espionage_probe'] ?? 0) + ($hangarQueue[210] ?? 0);
-
-            if ($probeTotal < self::PROBE_FLOOR) {
-                $cost = $this->getShipCost(210);
-                $affordable = (int) floor((float) ($planet['planet_crystal'] ?? 0) / $cost['crystal']);
-                $count = min(self::SHIP_CAPS[210] - $probeTotal, $affordable);
-
-                if ($count >= 1) {
-                    return ['ship_id' => 210, 'count' => $count, 'cost' => $cost];
-                }
+        // ─── Colony ship (ignores the reserve: it IS what the planet saves for) ──
+        if (($ctx['want_colony_ship'] ?? false) && $have(208) < 1) {
+            $order = $this->affordableOrder(208, 1, $planet, $user, []);
+            if ($order !== null) {
+                return $order;
             }
         }
 
-        // ─── Recycler floor: debris is a main income, not an afterthought (Dale, 7 Sep) ──
-        // 335 of 365 bot planets had ≥ 5K debris at their own coordinates and 333M sat in fields
-        // galaxy-wide while no bot owned a single recycler: 209 was in SHIP_CAPS but in no priority
-        // list (and the threat counter-build lists, which usually win, have none either), so the
-        // harvest phase in BotTick never fired. Exempt from the building reserve like probes —
-        // one 200K field pays for the whole floor. Needs Shipyard 4, Combustion 6, Shielding 2.
-        if ($personality !== 'passive' && $hangarLevel >= 4
-            && (int) ($user['research_combustion_drive'] ?? 0) >= 6
-            && (int) ($user['research_shielding_technology'] ?? 0) >= 2
-        ) {
-            $hangarQueue = $this->parseHangarQueue($planet['planet_b_hangar_id'] ?? '');
-            $recyclerTotal = (int) ($planet['ship_recycler'] ?? 0) + ($hangarQueue[209] ?? 0);
-
-            if ($recyclerTotal < self::RECYCLER_FLOOR) {
-                $cost = $this->getShipCost(209);
-                $affordable = min(
-                    (int) floor((float) ($planet['planet_metal'] ?? 0) / $cost['metal']),
-                    (int) floor((float) ($planet['planet_crystal'] ?? 0) / $cost['crystal']),
-                    (int) floor((float) ($planet['planet_deuterium'] ?? 0) / $cost['deuterium'])
-                );
-                $count = min(self::RECYCLER_FLOOR - $recyclerTotal, $affordable);
-
-                if ($count >= 1) {
-                    return ['ship_id' => 209, 'count' => $count, 'cost' => $cost];
-                }
+        // ─── Probes ──────────────────────────────────────────────────────────
+        // Probes only on the main planets (spying starts from the attack origin); every colony
+        // stocking 15-30 gave ~70 per bot in the sim.
+        $probeFloor = in_array($personality, ['turtle', 'passive'], true) ? self::PROBE_FLOOR_QUIET : self::PROBE_FLOOR;
+        if (($ctx['main_planet'] ?? true) && $have(210) < $probeFloor) {
+            $order = $this->affordableOrder(210, self::SHIP_CAPS[210] - $have(210), $planet, $user, []);
+            if ($order !== null) {
+                return $order;
             }
         }
 
-        // Analyze neighborhood threats for counter-building
-        $threats = $this->threatAnalyzer->analyzeThreats($planet);
+        // ─── Recyclers (debris is income) ────────────────────────────────────
+        if ($personality !== 'passive' && $have(209) < self::RECYCLER_FLOOR) {
+            $order = $this->affordableOrder(209, self::RECYCLER_FLOOR - $have(209), $planet, $user, $reserve);
+            if ($order !== null) {
+                return $order;
+            }
+        }
 
-        // Use counter-build priority if threat is medium or high
-        if ($threats['threat_level'] !== 'low' && $personality !== 'passive') {
-            $shipPriority = $threats['ship_priority'];
+        // ─── Cargo ───────────────────────────────────────────────────────────
+        if ($have(203) < self::LARGE_CARGO_FLOOR && $this->allowed(203, $planet, $user)) {
+            $order = $this->affordableOrder(203, self::LARGE_CARGO_FLOOR - $have(203), $planet, $user, $reserve);
+            if ($order !== null) {
+                return $order;
+            }
+        } elseif ($have(202) < self::SMALL_CARGO_FLOOR && !$this->allowed(203, $planet, $user)) {
+            $order = $this->affordableOrder(202, self::SMALL_CARGO_FLOOR - $have(202), $planet, $user, $reserve);
+            if ($order !== null) {
+                return $order;
+            }
+        }
+
+        // ─── Combat / defence ────────────────────────────────────────────────
+        return $this->militaryOrder($planet, $user, $reserve, $personality, $have, (bool) ($ctx['economy_first'] ?? false));
+    }
+
+    /**
+     * Best legal combat ship or defence the budget buys: a share of what is above the reserve.
+     *
+     * @param  callable(int): int  $have
+     */
+    private function militaryOrder(array $planet, array $user, array $reserve, string $personality, callable $have, bool $economyFirst = false): ?array
+    {
+        // Until the first colony exists the money goes to the colonisation road (Dale, 30 Sep:
+        // "colony ships is the first thing you should be going for")
+        $share = self::COMBAT_SPEND_SHARE[$personality] * ($economyFirst ? self::ECONOMY_FIRST_SHARE : 1.0);
+        $budget = [];
+        foreach (['metal', 'crystal', 'deuterium'] as $res) {
+            $budget[$res] = max(0.0, ((float) ($planet["planet_{$res}"] ?? 0) - (float) ($reserve[$res] ?? 0)) * $share);
+        }
+
+        $lists = [];
+        if ($personality === 'passive') {
+            $lists[] = self::DEFENCES['passive'];
+        } elseif ($personality === 'turtle') {
+            // Domes first (one each), then defence or ships by what the planet has less of
+            $defenceValue = $this->defenderPower(array_intersect_key($planet, array_flip(array_filter(array_keys($planet), fn ($k) => str_starts_with((string) $k, 'defense_')))));
+            $fleetValue = $this->calculateFleetStrength($this->getAvailableCombatShips($planet));
+            $lists[] = [408, 407];
+            $lists[] = $defenceValue <= $fleetValue * (self::TURTLE_DEFENCE_SHARE / (1 - self::TURTLE_DEFENCE_SHARE))
+                ? self::DEFENCES['turtle'] : self::COMBAT_SHIPS['turtle'];
         } else {
-            $shipPriority = match ($personality) {
-                'turtle'  => self::SHIP_PRIORITY_TURTLE,
-                'passive' => self::SHIP_PRIORITY_PASSIVE,
-                default   => self::SHIP_PRIORITY_RAIDER,
-            };
+            $lists[] = $this->withThreatCounters(self::COMBAT_SHIPS[$personality], $planet);
         }
 
-        // Parse hangar queue to count pending ships
-        $hangarQueue = $this->parseHangarQueue($planet['planet_b_hangar_id'] ?? '');
-
-        foreach ($shipPriority as $shipId => $minHangar) {
-            if ($hangarLevel < $minHangar) {
-                continue;
-            }
-
-            // Check ship cap (existing + queued + requested must not exceed cap)
-            if (isset(self::SHIP_CAPS[$shipId])) {
-                $shipColumn = $this->getShipColumn($shipId);
-                $existing = (int) ($planet[$shipColumn] ?? 0);
-                $queued = $hangarQueue[$shipId] ?? 0;
-                $totalWithQueued = $existing + $queued;
-
-                if ($totalWithQueued >= self::SHIP_CAPS[$shipId]) {
-                    continue; // Already at cap, skip to next ship
+        foreach ($lists as $list) {
+            foreach ($list as $id) {
+                if (isset(self::SHIP_CAPS[$id]) && $have($id) >= self::SHIP_CAPS[$id]) {
+                    continue;
                 }
-            }
+                if (!$this->allowed($id, $planet, $user)) {
+                    continue;
+                }
 
-            // Check if bot can afford at least 1
-            $cost = $this->getShipCost($shipId);
-
-            if ($cost === null) {
-                continue;
-            }
-
-            // Spendable = on hand minus the building reserve (never negative)
-            $metal = max(0.0, (float) ($planet['planet_metal'] ?? 0) - (float) ($reserve['metal'] ?? 0));
-            $crystal = max(0.0, (float) ($planet['planet_crystal'] ?? 0) - (float) ($reserve['crystal'] ?? 0));
-            $deuterium = max(0.0, (float) ($planet['planet_deuterium'] ?? 0) - (float) ($reserve['deuterium'] ?? 0));
-
-            if ($metal >= $cost['metal'] && $crystal >= $cost['crystal'] && $deuterium >= $cost['deuterium']) {
-                // Calculate how many we can afford
-                $maxByMetal = $cost['metal'] > 0 ? (int) floor($metal / $cost['metal']) : PHP_INT_MAX;
-                $maxByCrystal = $cost['crystal'] > 0 ? (int) floor($crystal / $cost['crystal']) : PHP_INT_MAX;
-                $maxByDeuterium = $cost['deuterium'] > 0 ? (int) floor($deuterium / $cost['deuterium']) : PHP_INT_MAX;
-
-                $count = min($maxByMetal, $maxByCrystal, $maxByDeuterium, 20); // Cap at 20 per tick
-
-                // If ship has a total cap, limit count to remaining room
-                if (isset(self::SHIP_CAPS[$shipId])) {
-                    $remaining = self::SHIP_CAPS[$shipId] - $totalWithQueued;
-                    $count = min($count, max(0, $remaining));
+                $cost = $this->price($id);
+                $count = self::MAX_ORDER;
+                foreach (['metal', 'crystal', 'deuterium'] as $res) {
+                    if ($cost[$res] > 0) {
+                        $count = min($count, (int) floor($budget[$res] / $cost[$res]));
+                    }
+                }
+                if (isset(self::SHIP_CAPS[$id])) {
+                    $count = min($count, self::SHIP_CAPS[$id] - $have($id));
                 }
 
                 if ($count >= 1) {
-                    return ['ship_id' => $shipId, 'count' => $count, 'cost' => $cost];
+                    return ['ship_id' => $id, 'count' => $count, 'cost' => $cost];
                 }
             }
         }
@@ -935,35 +1206,73 @@ class BotBrain
     }
 
     /**
-     * Parse the hangar queue string (e.g. "210,20;202,5;") into ship_id => count.
+     * When the neighbourhood reads as dangerous, move ThreatAnalyzer's counter ships to the front
+     * of the list — they are RANKS (1 = best counter), not shipyard levels as the old code read them.
+     *
+     * @param  list<int>  $list
+     * @return list<int>
      */
-    private function parseHangarQueue(string $queue): array
+    private function withThreatCounters(array $list, array $planet): array
     {
-        $result = [];
-        if (empty($queue)) {
-            return $result;
+        try {
+            $threats = $this->threatAnalyzer->analyzeThreats($planet);
+        } catch (\Throwable) {
+            return $list;
         }
 
-        $entries = explode(';', $queue);
-        foreach ($entries as $entry) {
-            $entry = trim($entry);
-            if (empty($entry)) {
-                continue;
+        if (($threats['threat_level'] ?? 'low') === 'low') {
+            return $list;
+        }
+
+        $ranks = $threats['ship_priority'] ?? [];
+        asort($ranks);
+        $counters = array_values(array_filter(array_map('intval', array_keys($ranks)), fn ($id) => in_array($id, $list, true)));
+
+        return array_values(array_unique(array_merge($counters, $list)));
+    }
+
+    /**
+     * Up to $wanted of $id if the game allows it and the planet can pay (above $reserve).
+     *
+     * @return array{ship_id: int, count: int, cost: array{metal: float, crystal: float, deuterium: float}}|null
+     */
+    private function affordableOrder(int $id, int $wanted, array $planet, array $user, array $reserve): ?array
+    {
+        if ($wanted < 1 || !$this->allowed($id, $planet, $user)) {
+            return null;
+        }
+
+        $cost = $this->price($id);
+        $count = $wanted;
+        foreach (['metal', 'crystal', 'deuterium'] as $res) {
+            if ($cost[$res] > 0) {
+                $spendable = max(0.0, (float) ($planet["planet_{$res}"] ?? 0) - (float) ($reserve[$res] ?? 0));
+                $count = min($count, (int) floor($spendable / $cost[$res]));
             }
-            $parts = explode(',', $entry);
+        }
+
+        return $count >= 1 ? ['ship_id' => $id, 'count' => $count, 'cost' => $cost] : null;
+    }
+
+    /**
+     * Parse the hangar queue string (e.g. "210,20;202,5;") into ship_id => count.
+     *
+     * @return array<int, int>
+     */
+    public function parseHangarQueue(string $queue): array
+    {
+        $result = [];
+
+        foreach (explode(';', $queue) as $entry) {
+            $parts = explode(',', trim($entry));
             if (count($parts) === 2) {
-                $shipId = (int) $parts[0];
-                $count = (int) $parts[1];
-                $result[$shipId] = ($result[$shipId] ?? 0) + $count;
+                $result[(int) $parts[0]] = ($result[(int) $parts[0]] ?? 0) + (int) $parts[1];
             }
         }
 
         return $result;
     }
 
-    /**
-     * Map ship ID to planet column name.
-     */
     private function getShipColumn(int $shipId): string
     {
         $columns = [
@@ -974,140 +1283,18 @@ class BotBrain
             210 => 'ship_espionage_probe', 211 => 'ship_bomber',
             212 => 'ship_solar_satellite', 213 => 'ship_destroyer',
             214 => 'ship_deathstar', 215 => 'ship_reaper',
+            401 => 'defense_rocket_launcher', 402 => 'defense_light_laser',
+            403 => 'defense_heavy_laser', 404 => 'defense_gauss_cannon',
+            405 => 'defense_ion_cannon', 406 => 'defense_plasma_turret',
+            407 => 'defense_small_shield_dome', 408 => 'defense_large_shield_dome',
         ];
 
         return $columns[$shipId] ?? "ship_{$shipId}";
     }
 
-    /**
-     * Decide what research to conduct next.
-     *
-     * Uses ROI-based selection — picks the research that gives the
-     * best return on investment (including strategic value for tech
-     * that doesn't directly produce resources).
-     *
-     * @param  array<string, mixed>  $user
-     *
-     * @return int|null Research ID or null
-     */
-    public function nextResearch(array $user, array $planet = []): ?int
-    {
-        // Already researching?
-        if ((int) ($user['research_current_research'] ?? 0) > 0) {
-            return null;
-        }
-
-        $bestResearch = null;
-        $bestAffordableResearch = null;
-        $bestScore = PHP_FLOAT_MAX;
-        $bestAffordableScore = PHP_FLOAT_MAX;
-
-        // All researchable techs
-        $researchIds = [
-            106, 108, 109, 110, 111, 113, 114, 115, 117, 118, 120, 121, 122, 124, 199,
-        ];
-
-        foreach ($researchIds as $researchId) {
-            // Check prerequisites
-            if (!$this->meetsResearchPrerequisites($researchId, $user)) {
-                continue;
-            }
-
-            $currentLevel = (int) ($user['research_' . $this->getResearchColumn($researchId)] ?? 0);
-
-            // Don't research past reasonable caps
-            $maxLevel = match ($researchId) {
-                106 => 12,   // Espionage
-                108 => 10,   // Computer
-                109 => 15,   // Weapons
-                110 => 15,   // Shielding
-                111 => 15,   // Armour
-                113 => 12,   // Energy
-                114 => 8,    // Hyperspace Tech
-                115 => 15,   // Combustion
-                117 => 15,   // Impulse
-                118 => 10,   // Hyperspace Drive
-                120 => 12,   // Laser
-                121 => 10,   // Ionic
-                122 => 10,   // Plasma
-                124 => 8,    // Astrophysics (8 colonies max for bots)
-                199 => 1,    // Graviton
-                default => 10,
-            };
-
-            if ($currentLevel >= $maxLevel) {
-                continue;
-            }
-
-            // Calculate DOIR
-            $doir = ROICalculator::calcResearchDOIR($user, $planet, $researchId);
-
-            // Track best overall (for reference)
-            if ($doir < $bestScore) {
-                $bestScore = $doir;
-                $bestResearch = $researchId;
-            }
-
-            // Track best AFFORDABLE — this is what we actually return.
-            // Prevents deadlock: bot defers building for research it can't afford,
-            // resources sit idle, nothing happens for hours.
-            if (!empty($planet) && $doir < $bestAffordableScore) {
-                $cost = $this->getResearchCost($researchId, $currentLevel);
-                if ($cost !== null) {
-                    $metal = (float) ($planet['planet_metal'] ?? 0);
-                    $crystal = (float) ($planet['planet_crystal'] ?? 0);
-                    $deuterium = (float) ($planet['planet_deuterium'] ?? 0);
-
-                    if ($metal >= $cost['metal'] && $crystal >= $cost['crystal'] && $deuterium >= $cost['deuterium']) {
-                        $bestAffordableScore = $doir;
-                        $bestAffordableResearch = $researchId;
-                    }
-                }
-            }
-        }
-
-        // Return affordable research if available, otherwise null
-        // (null means building system takes over instead of deadlocking)
-        return $bestAffordableResearch;
-    }
-
-    /**
-     * Check if a bot meets the prerequisites for a research.
-     *
-     * Prereq map from GameObjectRegistry (Lab level not checked here —
-     * game engine rejects if lab is too low).
-     */
-    private function meetsResearchPrerequisites(int $researchId, array $user): bool
-    {
-        $requirements = [
-            106 => [],                          // Espionage Tech — no prereqs (Lab 3)
-            108 => [],                          // Computer Tech — no prereqs (Lab 1)
-            109 => [],                          // Weapons Tech — no prereqs (Lab 4)
-            110 => [113 => 3],                  // Shielding Tech — Energy 3 (Lab 6)
-            111 => [],                          // Armour Tech — no prereqs (Lab 2)
-            113 => [],                          // Energy Tech — no prereqs (Lab 1)
-            114 => [113 => 5, 110 => 5],        // Hyperspace Tech — Energy 5, Shielding 5 (Lab 7)
-            115 => [113 => 1],                  // Combustion Drive — Energy 1 (Lab 1)
-            117 => [113 => 1],                  // Impulse Drive — Energy 1 (Lab 2)
-            118 => [114 => 3],                  // Hyperspace Drive — Hyperspace Tech 3 (Lab 7)
-            120 => [113 => 2],                  // Laser Tech — Energy 2 (Lab 1)
-            121 => [113 => 4, 120 => 5],        // Ionic Tech — Energy 4, Laser 5 (Lab 4)
-            122 => [113 => 8, 120 => 10, 121 => 5],  // Plasma Tech — Energy 8, Laser 10, Ionic 5 (Lab 5)
-            124 => [106 => 4, 117 => 3],        // Astrophysics — Espionage 4, Impulse 3 (Lab 3)
-            199 => [],                          // Graviton — no prereqs (Lab 12)
-        ];
-
-        $reqs = $requirements[$researchId] ?? [];
-
-        foreach ($reqs as $reqId => $reqLevel) {
-            $currentLevel = (int) ($user['research_' . $this->getResearchColumn($reqId)] ?? 0);
-            if ($currentLevel < $reqLevel) {
-                return false;
-            }
-        }
-
-        return true;
-    }
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Attack planning (unchanged in Phase 2)
+    // ═════════════════════════════════════════════════════════════════════════
 
     /**
      * Decide whether to attack a target.
@@ -1128,7 +1315,6 @@ class BotBrain
 
         $this->lastAttackDebug = [];
 
-        // Calculate available combat ships
         $availableShips = $this->getAvailableCombatShips($botPlanet);
 
         if (empty($availableShips)) {
@@ -1138,7 +1324,7 @@ class BotBrain
         $defenderPlanet = $target['planet_data'] ?? [];
 
         if (empty($defenderPlanet)) {
-            return null; // No defender data available
+            return null;
         }
 
         $defenderUser = [
@@ -1147,27 +1333,23 @@ class BotBrain
             'research_armour_technology' => (int) ($defenderPlanet['research_armour_technology'] ?? 0),
         ];
 
-        // Personality-based loss tolerance
         $maxLossRate = match ($personality) {
-            'raider' => 0.7,   // Raiders accept 70% losses for good loot
-            'turtle' => 0.3,   // Turtles only attack if they'll barely lose anything
-            'balanced' => 0.5, // Balanced: up to 50% losses
+            'raider' => 0.7,
+            'turtle' => 0.3,
+            'balanced' => 0.5,
             default => 0.5,
         };
 
-        // Resource pressure: if bot can't afford next build soon, take riskier fights
         if ($this->isUnderResourcePressure($botPlanet)) {
-            $maxLossRate = min($maxLossRate + 0.2, 0.95); // Up to 95% losses when desperate
+            $maxLossRate = min($maxLossRate + 0.2, 0.95);
         }
 
         // Cargo: the game hands over up to half of what is on the planet, capped by hold space.
         $cargo = $this->pickCargo($availableShips, (int) ceil(((int) ($target['resources'] ?? 0)) / 2));
         $defenderPower = $this->defenderPower($defenderPlanet);
 
-        // Size the raid to the target. Until 6 Sep the fleet was a fixed 50 LF / 10 HF / 5 CR
-        // (~6K power) while neighbours average 216 LF / 47 HF / 48 CR (~40K) — every honest
-        // simulation lost and attacks fell to 0/tick. Now try growing shares of the combat
-        // fleet and send the smallest one the battle engine says wins within the loss limit.
+        // Try growing shares of the combat fleet and send the smallest one the battle engine says
+        // wins within the loss limit (6 Sep).
         $lastFleet = null;
 
         foreach (self::ATTACK_TIERS as $share) {
@@ -1181,18 +1363,16 @@ class BotBrain
             }
 
             if (count($fleet) === count($cargo) || $fleet === $lastFleet) {
-                continue; // no combat ships at this share, or same fleet as the previous tier
+                continue;
             }
             $lastFleet = $fleet;
 
-            // Cheap pre-check: don't run the battle engine for hopeless fights
             $ownPower = $this->calculateFleetStrength($fleet);
             if ($ownPower < $defenderPower * 0.5) {
                 $this->lastAttackDebug = ['tier' => $share, 'skipped' => 'power', 'own' => $ownPower, 'def' => $defenderPower];
                 continue;
             }
 
-            // Fuel (keep a 2x reserve). Bigger tiers only cost more, so stop here.
             $fuel = $this->estimateFuel($fleet, $botPlanet, $botUser, $target);
             if ($fuel > 0 && (float) ($botPlanet['planet_deuterium'] ?? 0) < $fuel * 2) {
                 $this->lastAttackDebug = ['tier' => $share, 'skipped' => 'fuel', 'fuel' => $fuel];
@@ -1208,19 +1388,14 @@ class BotBrain
             $attackerInitial = array_sum($fleet);
             $lossRate = $attackerInitial > 0 ? $simResult['attacker_losses'] / $attackerInitial : 1;
 
-            // Profitability: the loot must at least pay for the ships we expect to lose
-            // (a bigger tier usually loses fewer ships, so keep climbing if this one doesn't pay).
-            // The engine's own getSteal() is always 0 here — the simulator never hands it the
-            // planet's resources — so estimate: half of what the target holds, capped by the hold
-            // space of the ships that survive the fight.
             $lostValue = 0;
             $holdSpace = 0;
             foreach ($simResult['attacker_ships_detail'] ?? [] as $shipId => $detail) {
                 $initial = (int) ($detail['initial'] ?? 0);
                 $final = (int) ($detail['final'] ?? 0);
                 $lost = max(0, $initial - $final);
-                $cost = $this->getShipCost((int) $shipId);
-                if ($lost > 0 && $cost !== null) {
+                if ($lost > 0) {
+                    $cost = $this->price((int) $shipId);
                     $lostValue += $lost * ($cost['metal'] + $cost['crystal'] + $cost['deuterium']);
                 }
                 $holdSpace += max(0, $final) * (self::CARGO_CAPACITY[(int) $shipId] ?? 0);
@@ -1232,8 +1407,6 @@ class BotBrain
                 'loot' => $lootValue, 'lost' => $lostValue, 'own' => $ownPower, 'def' => $defenderPower,
             ];
 
-            // Loot must beat the losses with a margin — intel is minutes to hours old and the
-            // target's fleet may have grown by the time we arrive.
             if ($simResult['winner'] === 'attacker' && $lossRate <= $maxLossRate && $lootValue >= $lostValue * self::LOOT_MARGIN) {
                 return $fleet;
             }
@@ -1245,10 +1418,10 @@ class BotBrain
     /** Attack fleet sizes to try, as a share of the combat ships on the origin planet. */
     private const ATTACK_TIERS = [0.34, 0.67, 1.0];
 
-    /** Combat ships that go on raids (never cargo-only ships, probes, sats, colony ships, recyclers). */
+    /** Combat ships that go on raids. */
     private const ATTACK_SHIP_ORDER = [204, 205, 206, 207, 211, 213, 215];
 
-    /** Estimated loot must be at least this many times the value of the ships the sim expects to lose. */
+    /** Estimated loot must be at least this many times the value of the ships expected lost. */
     private const LOOT_MARGIN = 1.25;
 
     /** Hold space per ship (game values) for the loot estimate in planAttack(). */
@@ -1291,10 +1464,8 @@ class BotBrain
     }
 
     /**
-     * Rough combat power of a defender planet array (ships + defences), same scale as
-     * calculateFleetStrength(). Used only to skip hopeless simulations.
-     *
-     * @param  array<string, mixed>  $planet
+     * Rough combat power of a planet array (ships + defences), same scale as
+     * calculateFleetStrength(). Used to skip hopeless simulations.
      */
     private function defenderPower(array $planet): int
     {
@@ -1316,87 +1487,38 @@ class BotBrain
         return $power;
     }
 
-    /**
-     * Check if a bot is under resource pressure (can't afford next build soon).
-     * Under-pressure bots take riskier fights to get resources.
-     *
-     * @param  array<string, mixed>  $planet
-     */
+    /** Under pressure = holds less than 5 hours of its own production; takes riskier fights. */
     private function isUnderResourcePressure(array $planet): bool
     {
-        $metal = (float) ($planet['planet_metal'] ?? 0);
-        $crystal = (float) ($planet['planet_crystal'] ?? 0);
-        $deuterium = (float) ($planet['planet_deuterium'] ?? 0);
-        $totalResources = $metal + $crystal + $deuterium;
+        $total = (float) ($planet['planet_metal'] ?? 0) + (float) ($planet['planet_crystal'] ?? 0) + (float) ($planet['planet_deuterium'] ?? 0);
+        $hourly = (float) ($planet['planet_metal_perhour'] ?? 0) + (float) ($planet['planet_crystal_perhour'] ?? 0) + (float) ($planet['planet_deuterium_perhour'] ?? 0);
 
-        // Calculate approximate hourly income from mines
-        $metalLevel = (int) ($planet['building_metal_mine'] ?? 0);
-        $crystalLevel = (int) ($planet['building_crystal_mine'] ?? 0);
-        $deutLevel = (int) ($planet['building_deuterium_sintetizer'] ?? 0);
-
-        // Rough hourly income estimate (base * level * 1.1^level * speed factor)
-        $hourlyIncome = 0;
-        if ($metalLevel > 0) $hourlyIncome += 30 * $metalLevel * pow(1.1, $metalLevel) * 30;
-        if ($crystalLevel > 0) $hourlyIncome += 20 * $crystalLevel * pow(1.1, $crystalLevel) * 30;
-        if ($deutLevel > 0) $hourlyIncome += 10 * $deutLevel * pow(1.1, $deutLevel) * 30;
-
-        if ($hourlyIncome <= 0) {
-            return false; // Can't calculate, assume not under pressure
-        }
-
-        // If total resources are less than 5 hours of production, bot needs to raid
-        return $totalResources < ($hourlyIncome * 5);
+        return $hourly > 0 && $total < $hourly * 5;
     }
 
-    /**
-     * Get available combat ships on a planet.
-     *
-     * @param  array<string, mixed>  $planet
-     * @return array<int, int>
-     */
+    /** @return array<int, int> */
     private function getAvailableCombatShips(array $planet): array
     {
-        $combatShips = [
-            202 => (int) ($planet['ship_small_cargo_ship'] ?? 0),
-            203 => (int) ($planet['ship_big_cargo_ship'] ?? 0),
-            204 => (int) ($planet['ship_light_fighter'] ?? 0),
-            205 => (int) ($planet['ship_heavy_fighter'] ?? 0),
-            206 => (int) ($planet['ship_cruiser'] ?? 0),
-            207 => (int) ($planet['ship_battleship'] ?? 0),
-            211 => (int) ($planet['ship_bomber'] ?? 0),
-            213 => (int) ($planet['ship_destroyer'] ?? 0),
-            214 => (int) ($planet['ship_deathstar'] ?? 0),
-            215 => (int) ($planet['ship_reaper'] ?? 0),
-        ];
+        $ships = [];
+        foreach ([202, 203, 204, 205, 206, 207, 211, 213, 214, 215] as $id) {
+            $count = (int) ($planet[$this->getShipColumn($id)] ?? 0);
+            if ($count > 0) {
+                $ships[$id] = $count;
+            }
+        }
 
-        return array_filter($combatShips, fn ($count) => $count > 0);
+        return $ships;
     }
 
-    /**
-     * Calculate the combat strength of a fleet.
-     *
-     * @param  array<int, int>  $ships
-     */
+    /** @param  array<int, int>  $ships */
     private function calculateFleetStrength(array $ships): int
     {
         $power = [
-            202 => 5,    // Small Cargo
-            203 => 5,    // Large Cargo
-            204 => 50,   // Light Fighter
-            205 => 150,  // Heavy Fighter
-            206 => 400,  // Cruiser
-            207 => 1000, // Battleship
-            208 => 50,   // Colony Ship
-            209 => 1,    // Recycler
-            210 => 0,    // Espionage Probe
-            211 => 1000, // Bomber
-            213 => 2000, // Destroyer
-            214 => 200000, // Deathstar
-            215 => 2800, // Reaper
+            202 => 5, 203 => 5, 204 => 50, 205 => 150, 206 => 400, 207 => 1000, 208 => 50,
+            209 => 1, 210 => 0, 211 => 1000, 213 => 2000, 214 => 200000, 215 => 2800,
         ];
 
         $total = 0;
-
         foreach ($ships as $shipId => $count) {
             $total += ($power[$shipId] ?? 0) * $count;
         }
@@ -1404,242 +1526,49 @@ class BotBrain
         return $total;
     }
 
-    /**
-     * Rough fuel estimate for an attack fleet.
-     *
-     * @param  array<int, int>  $ships
-     * @param  array<string, mixed>  $planet
-     * @param  array<string, mixed>  $user
-     * @param  array{distance: int}  $target
-     */
+    /** Rough fuel estimate for an attack fleet. */
     private function estimateFuel(array $ships, array $planet, array $user, array $target): int
     {
-        $consumption = [
-            202 => 10, 203 => 50, 204 => 20, 205 => 75,
-            206 => 300, 207 => 500, 210 => 1,
-        ];
+        $consumption = [202 => 10, 203 => 50, 204 => 20, 205 => 75, 206 => 300, 207 => 500, 210 => 1];
 
-        $totalConsumption = 0;
-
+        $total = 0;
         foreach ($ships as $shipId => $count) {
-            $totalConsumption += ($consumption[$shipId] ?? 50) * $count;
+            $total += ($consumption[$shipId] ?? 50) * $count;
         }
 
-        // Rough estimate: consumption * distance / 35000
-        return (int) ($totalConsumption * $target['distance'] / 35000 + 1);
+        return (int) ($total * (int) ($target['distance'] ?? 0) / 35000 + 1);
     }
 
-    /**
-     * Get the current level of a building on a planet.
-     *
-     * @param  array<string, mixed>  $planet
-     */
+    // ═════════════════════════════════════════════════════════════════════════
+    //  Levels
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /** Current level of a building on a planet array. */
     public function getBuildingLevel(int $buildingId, array $planet): int
     {
         $columns = [
-            Buildings::BUILDING_METAL_MINE       => 'building_metal_mine',
-            Buildings::BUILDING_CRYSTAL_MINE      => 'building_crystal_mine',
+            Buildings::BUILDING_METAL_MINE           => 'building_metal_mine',
+            Buildings::BUILDING_CRYSTAL_MINE         => 'building_crystal_mine',
             Buildings::BUILDING_DEUTERIUM_SINTETIZER => 'building_deuterium_sintetizer',
-            Buildings::BUILDING_SOLAR_PLANT       => 'building_solar_plant',
-            Buildings::BUILDING_FUSION_REACTOR    => 'building_fusion_reactor',
-            Buildings::BUILDING_ROBOT_FACTORY     => 'building_robot_factory',
-            Buildings::BUILDING_NANO_FACTORY      => 'building_nano_factory',
-            Buildings::BUILDING_HANGAR            => 'building_hangar',
-            Buildings::BUILDING_METAL_STORE       => 'building_metal_store',
-            Buildings::BUILDING_CRYSTAL_STORE     => 'building_crystal_store',
-            Buildings::BUILDING_DEUTERIUM_TANK    => 'building_deuterium_tank',
-            Buildings::BUILDING_LABORATORY        => 'building_laboratory',
-            Buildings::BUILDING_TERRAFORMER       => 'building_terraformer',
-            Buildings::BUILDING_ALLY_DEPOSIT      => 'building_ally_deposit',
-            Buildings::BUILDING_MISSILE_SILO      => 'building_missile_silo',
-            Buildings::BUILDING_MONDBASIS         => 'building_mondbasis',
-            Buildings::BUILDING_PHALANX           => 'building_phalanx',
-            Buildings::BUILDING_JUMP_GATE         => 'building_jump_gate',
+            Buildings::BUILDING_SOLAR_PLANT          => 'building_solar_plant',
+            Buildings::BUILDING_FUSION_REACTOR       => 'building_fusion_reactor',
+            Buildings::BUILDING_ROBOT_FACTORY        => 'building_robot_factory',
+            Buildings::BUILDING_NANO_FACTORY         => 'building_nano_factory',
+            Buildings::BUILDING_HANGAR               => 'building_hangar',
+            Buildings::BUILDING_METAL_STORE          => 'building_metal_store',
+            Buildings::BUILDING_CRYSTAL_STORE        => 'building_crystal_store',
+            Buildings::BUILDING_DEUTERIUM_TANK       => 'building_deuterium_tank',
+            Buildings::BUILDING_LABORATORY           => 'building_laboratory',
+            Buildings::BUILDING_TERRAFORMER          => 'building_terraformer',
+            Buildings::BUILDING_ALLY_DEPOSIT         => 'building_ally_deposit',
+            Buildings::BUILDING_MISSILE_SILO         => 'building_missile_silo',
+            Buildings::BUILDING_MONDBASIS            => 'building_mondbasis',
+            Buildings::BUILDING_PHALANX              => 'building_phalanx',
+            Buildings::BUILDING_JUMP_GATE            => 'building_jump_gate',
         ];
 
         $column = $columns[$buildingId] ?? null;
 
         return $column ? (int) ($planet[$column] ?? 0) : 0;
-    }
-
-    /**
-     * @param  array<string, mixed>  $planet
-     */
-    private function canAfford(int $buildingId, int $currentLevel, array $planet): bool
-    {
-        if ($this->ignoreAffordability) {
-            return true; // wantedBuildingCost() — see there
-        }
-
-        $cost = $this->getBuildingCost($buildingId, $currentLevel);
-
-        $metal = (float) ($planet['planet_metal'] ?? 0);
-        $crystal = (float) ($planet['planet_crystal'] ?? 0);
-        $deuterium = (float) ($planet['planet_deuterium'] ?? 0);
-
-        return $metal >= $cost['metal']
-            && $crystal >= $cost['crystal']
-            && $deuterium >= $cost['deuterium'];
-    }
-
-    /**
-     * @return array{metal: float, crystal: float, deuterium: float}
-     */
-    private function getBuildingCost(int $buildingId, int $currentLevel): array
-    {
-        $baseCosts = [
-            Buildings::BUILDING_METAL_MINE       => ['metal' => 60,    'crystal' => 15,   'deuterium' => 0,     'factor' => 1.5],
-            Buildings::BUILDING_CRYSTAL_MINE      => ['metal' => 48,    'crystal' => 24,   'deuterium' => 0,     'factor' => 1.6],
-            Buildings::BUILDING_DEUTERIUM_SINTETIZER => ['metal' => 225,   'crystal' => 75,   'deuterium' => 0,     'factor' => 1.5],
-            Buildings::BUILDING_SOLAR_PLANT       => ['metal' => 75,    'crystal' => 30,   'deuterium' => 0,     'factor' => 1.5],
-            Buildings::BUILDING_FUSION_REACTOR    => ['metal' => 900,   'crystal' => 360,  'deuterium' => 180,   'factor' => 1.8],
-            Buildings::BUILDING_ROBOT_FACTORY     => ['metal' => 400,   'crystal' => 120,  'deuterium' => 250,   'factor' => 2.0],
-            Buildings::BUILDING_NANO_FACTORY      => ['metal' => 1000000, 'crystal' => 500000, 'deuterium' => 100000, 'factor' => 2.0],
-            Buildings::BUILDING_HANGAR            => ['metal' => 400,   'crystal' => 200,  'deuterium' => 100,   'factor' => 2.0],
-            Buildings::BUILDING_METAL_STORE       => ['metal' => 2000,  'crystal' => 0,    'deuterium' => 0,     'factor' => 2.0],
-            Buildings::BUILDING_CRYSTAL_STORE     => ['metal' => 2000,  'crystal' => 1000, 'deuterium' => 0,     'factor' => 2.0],
-            Buildings::BUILDING_DEUTERIUM_TANK    => ['metal' => 2000,  'crystal' => 2000, 'deuterium' => 0,     'factor' => 2.0],
-            Buildings::BUILDING_LABORATORY        => ['metal' => 200,   'crystal' => 400,  'deuterium' => 200,   'factor' => 2.0],
-            Buildings::BUILDING_TERRAFORMER       => ['metal' => 0,     'crystal' => 50000, 'deuterium' => 100000, 'factor' => 2.0],
-            Buildings::BUILDING_ALLY_DEPOSIT      => ['metal' => 20000, 'crystal' => 40000, 'deuterium' => 0,     'factor' => 2.0],
-            Buildings::BUILDING_MISSILE_SILO      => ['metal' => 20000, 'crystal' => 20000, 'deuterium' => 1000,  'factor' => 2.0],
-            Buildings::BUILDING_MONDBASIS         => ['metal' => 20000, 'crystal' => 40000, 'deuterium' => 20000, 'factor' => 2.0],
-            Buildings::BUILDING_PHALANX           => ['metal' => 20000, 'crystal' => 40000, 'deuterium' => 20000, 'factor' => 2.0],
-            Buildings::BUILDING_JUMP_GATE         => ['metal' => 2000000, 'crystal' => 4000000, 'deuterium' => 2000000, 'factor' => 2.0],
-        ];
-
-        $base = $baseCosts[$buildingId] ?? ['metal' => 0, 'crystal' => 0, 'deuterium' => 0, 'factor' => 2.0];
-        $factor = $base['factor'];
-
-        return [
-            'metal'     => round($base['metal'] * pow($factor, $currentLevel)),
-            'crystal'   => round($base['crystal'] * pow($factor, $currentLevel)),
-            'deuterium' => round($base['deuterium'] * pow($factor, $currentLevel)),
-        ];
-    }
-
-    /**
-     * Get ship cost by ID.
-     *
-     * @return array{metal: int, crystal: int, deuterium: int}|null
-     */
-    private function getShipCost(int $shipId): ?array
-    {
-        $costs = [
-            202 => ['metal' => 2000,  'crystal' => 2000,  'deuterium' => 0],
-            203 => ['metal' => 6000,  'crystal' => 6000,  'deuterium' => 0],
-            204 => ['metal' => 3000,  'crystal' => 1000,  'deuterium' => 0],
-            205 => ['metal' => 6000,  'crystal' => 4000,  'deuterium' => 0],
-            206 => ['metal' => 20000, 'crystal' => 7000,  'deuterium' => 2000],
-            207 => ['metal' => 45000, 'crystal' => 15000, 'deuterium' => 0],
-            208 => ['metal' => 10000, 'crystal' => 20000, 'deuterium' => 10000],
-            209 => ['metal' => 10000, 'crystal' => 6000,  'deuterium' => 2000],
-            210 => ['metal' => 0,     'crystal' => 1000,  'deuterium' => 0],
-            211 => ['metal' => 50000, 'crystal' => 25000, 'deuterium' => 15000],
-            212 => ['metal' => 0,     'crystal' => 2000,  'deuterium' => 500],
-            213 => ['metal' => 60000, 'crystal' => 50000, 'deuterium' => 15000],
-            214 => ['metal' => 5000000, 'crystal' => 4000000, 'deuterium' => 1000000],
-            215 => ['metal' => 85000, 'crystal' => 55000, 'deuterium' => 20000],
-            // Defenses
-            401 => ['metal' => 2000,  'crystal' => 0,     'deuterium' => 0],
-            402 => ['metal' => 1500,  'crystal' => 500,   'deuterium' => 0],
-            403 => ['metal' => 6000,  'crystal' => 2000,  'deuterium' => 0],
-            404 => ['metal' => 20000, 'crystal' => 15000, 'deuterium' => 2000],
-            405 => ['metal' => 2000,  'crystal' => 6000,  'deuterium' => 0],
-            406 => ['metal' => 50000, 'crystal' => 50000, 'deuterium' => 30000],
-            502 => ['metal' => 10000, 'crystal' => 10000, 'deuterium' => 0],
-        ];
-
-        return $costs[$shipId] ?? null;
-    }
-
-    /**
-     * Get research cost by ID and level.
-     *
-     * @return array{metal: float, crystal: float, deuterium: float}|null
-     */
-    private function getResearchCost(int $researchId, int $level): ?array
-    {
-        $baseCosts = [
-            106 => ['metal' => 200,   'crystal' => 1000,  'deuterium' => 200,   'factor' => 2.0],
-            108 => ['metal' => 0,     'crystal' => 400,   'deuterium' => 600,   'factor' => 2.0],
-            109 => ['metal' => 800,   'crystal' => 200,   'deuterium' => 0,     'factor' => 2.0],
-            110 => ['metal' => 200,   'crystal' => 600,   'deuterium' => 0,     'factor' => 2.0],
-            111 => ['metal' => 1000,  'crystal' => 0,     'deuterium' => 0,     'factor' => 2.0],
-            113 => ['metal' => 0,     'crystal' => 800,   'deuterium' => 400,   'factor' => 2.0],
-            115 => ['metal' => 400,   'crystal' => 0,     'deuterium' => 600,   'factor' => 2.0],
-            117 => ['metal' => 2000,  'crystal' => 4000,  'deuterium' => 600,   'factor' => 2.0],
-            118 => ['metal' => 10000, 'crystal' => 20000, 'deuterium' => 6000,  'factor' => 2.0],
-            120 => ['metal' => 200,   'crystal' => 100,   'deuterium' => 0,     'factor' => 2.0],
-            121 => ['metal' => 1000,  'crystal' => 300,   'deuterium' => 100,   'factor' => 2.0],
-            122 => ['metal' => 2000,  'crystal' => 4000,  'deuterium' => 1000,  'factor' => 2.0],
-            114 => ['metal' => 0,     'crystal' => 4000,  'deuterium' => 2000,  'factor' => 2.0],  // Hyperspace Tech (was missing → never affordable)
-            124 => ['metal' => 4000,  'crystal' => 8000,  'deuterium' => 4000,  'factor' => 1.75], // Astrophysics (was missing → never affordable)
-            // 199 Graviton deliberately absent: costs 300K energy, not resources
-        ];
-
-        $base = $baseCosts[$researchId] ?? null;
-
-        if ($base === null) {
-            return null;
-        }
-
-        $factor = $base['factor'];
-
-        return [
-            'metal'     => round($base['metal'] * pow($factor, $level)),
-            'crystal'   => round($base['crystal'] * pow($factor, $level)),
-            'deuterium' => round($base['deuterium'] * pow($factor, $level)),
-        ];
-    }
-
-    /**
-     * Map research ID to database column suffix.
-     */
-    private function getResearchColumn(int $researchId): string
-    {
-        $columns = [
-            106 => 'espionage_technology',
-            108 => 'computer_technology',
-            109 => 'weapons_technology',
-            110 => 'shielding_technology',
-            111 => 'armour_technology',
-            113 => 'energy_technology',
-            114 => 'hyperspace_technology',
-            115 => 'combustion_drive',
-            117 => 'impulse_drive',
-            118 => 'hyperspace_drive',
-            120 => 'laser_technology',
-            121 => 'ionic_technology',
-            122 => 'plasma_technology',
-            123 => 'intergalactic_research_network',
-            124 => 'astrophysics',
-            199 => 'graviton_technology',
-        ];
-
-        return $columns[$researchId] ?? 'energy_technology';
-    }
-
-    /**
-     * @param  array<string, mixed>  $planet
-     */
-    private function needsStorage(int $buildingId, array $planet): bool
-    {
-        $storageMap = [
-            Buildings::BUILDING_METAL_STORE    => ['resource' => 'planet_metal',      'store' => 'building_metal_store'],
-            Buildings::BUILDING_CRYSTAL_STORE  => ['resource' => 'planet_crystal',    'store' => 'building_crystal_store'],
-            Buildings::BUILDING_DEUTERIUM_TANK => ['resource' => 'planet_deuterium',  'store' => 'building_deuterium_tank'],
-        ];
-
-        if (!isset($storageMap[$buildingId])) {
-            return false;
-        }
-
-        $map = $storageMap[$buildingId];
-        $current = (float) ($planet[$map['resource']] ?? 0);
-        $storeLevel = (int) ($planet[$map['store']] ?? 0);
-        $max = $this->productionService->maxStorable($storeLevel);
-
-        return $current > ($max * 0.9);
     }
 }
