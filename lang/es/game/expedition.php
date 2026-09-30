@@ -87,4 +87,10 @@ return [
     // exploration status
     'exp_status_fresh_1' => 'Registro en el diario de navegación del oficial de comunicación: Parece como si esta parte del universo no hubiera sido explorada hasta ahora.', // ok
     'exp_status_fresh_2' => 'Registro en el diario de navegación del oficial de comunicación: Es una gran sensación ser el primero en un sector inexplorado.', // ok
+
+    // Expedition slots (30 Sep 2026)
+    'exp_picked_clean_1' => 'Tu expedición llegó al límite del sistema y lo encontró vacío. Otras flotas llegaron primero y no quedaba nada. Prueba un sistema más tranquilo.',
+    'exp_picked_clean_2' => 'Estelas de motores por todas partes. Esta región ya ha sido rastreada por otras flotas este periodo; tu expedición volvió con las manos vacías.',
+    'exp_picked_clean_3' => 'Tu flota llegó a un sector abarrotado: cada restos, asteroide y señal ya tenía dueño. No queda nada aquí por ahora.',
+    'exp_space_report' => 'Informe de la sonda: el espacio de expedición del sistema %d:%d está usado al %d%% este periodo.',
 ];

@@ -18,6 +18,25 @@
             document.querySelector('input[name="galaxy"]').value = data.galaxy;
             document.querySelector('input[name="system"]').value = data.system;
             
+            // Expedition slots follow the system on screen (the Expedition link used to keep
+                // pointing at the system the page was first opened on)
+                if (data.expedition) {
+                    var link = document.getElementById('exp_link');
+                    if (link) { link.href = data.expedition.link; }
+                    var tag = document.getElementById('exp_tag');
+                    if (tag) {
+                        tag.textContent = data.expedition.label;
+                        tag.style.backgroundColor = data.expedition.colour;
+                        tag.title = data.expedition.tooltip;
+                    }
+                    var space = document.getElementById('exp_space');
+                    if (space) {
+                        space.textContent = data.expedition.text;
+                        space.style.color = data.expedition.colour;
+                        space.title = data.expedition.tooltip;
+                    }
+                }
+
             var countEl = document.getElementById('planet_count_display');
             if (countEl) {
                 countEl.innerHTML = data.planet_count;
@@ -298,7 +317,8 @@
                             <input type="submit" value="{{ __('game/galaxy.gl_go') }}">
                         </td>
                         <td style="background-color: transparent; width: 50%; text-align: right;">
-                            <a href="game.php?page=fleet1&amp;galaxy={{ $selected_galaxy }}&amp;system={{ $selected_system }}&amp;planet=16&amp;planettype=1&amp;target_mission=15">
+                            <span id="exp_tag" title="{{ $expedition_space['tooltip'] }}" style="display:inline-block; margin-right:8px; padding:2px 10px; border-radius:11px; font-weight:bold; font-size:11px; color:#fff; white-space:nowrap; cursor:help; background-color:{{ $expedition_space['colour'] }};">{{ $expedition_space['label'] }}</span>
+                            <a id="exp_link" href="{{ $expedition_space['link'] }}">
                                 <input type="button" value="{{ __('game/galaxy.gl_expedition') }}">
                             </a>
                         </td>
@@ -327,6 +347,7 @@
                     <span id="slotUsed">{{ $maxfleetcount }}</span>/{{ $fleetmax }}
                 </span>
             </span>
+            <span id="exp_space" title="{{ $expedition_space['tooltip'] }}" style="margin-left:12px; cursor:help; color:{{ $expedition_space['colour'] }};">{{ $expedition_space['text'] }}</span>
         </th>
     </tr>
     <tr>

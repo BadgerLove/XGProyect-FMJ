@@ -86,4 +86,10 @@ return [
     // exploration status
     'exp_status_fresh_1' => 'Entry from the communications officers logbook: It seems that this part of the universe has not been explored yet.', // ok
     'exp_status_fresh_2' => 'Entry from the communications officers logbook: It feels great to be the first ones traveling through an unexplored sector.', // ok
+
+    // Expedition slots (30 Sep 2026)
+    'exp_picked_clean_1' => 'Your expedition reached the edge of the system only to find it picked clean. Other fleets got here first and there was nothing left to find. Try a quieter system.',
+    'exp_picked_clean_2' => 'Fresh engine trails everywhere. This region of space has already been combed through by other fleets this period; your expedition came back empty-handed.',
+    'exp_picked_clean_3' => 'Your fleet arrived to a crowded sector: every wreck, asteroid and signal had already been claimed. Nothing left here for now.',
+    'exp_space_report' => 'Probe report: expedition space in system %d:%d is %d%% used this period.',
 ];

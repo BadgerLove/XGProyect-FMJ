@@ -95,4 +95,12 @@ return [
     'gl_no_missiles' => 'No hay misiles interplanetarios disponibles',
     'gl_add_missile_number' => 'Ingresar el número de misiles que deseas enviar',
     'gl_missiles_sended' => ' misiles interplanetarios se enviaron. objetivo principal: ',
+
+    // Expedition slots (30 Sep 2026)
+    'gl_exp_space' => 'Espacio de expedición',
+    'gl_exp_fresh' => 'Libre',
+    'gl_exp_busy' => 'Concurrido',
+    'gl_exp_full' => 'Lleno',
+    'gl_exp_used' => '%d%% usado',
+    'gl_exp_tooltip' => 'Espacio de expedición en %d:%d: %d%% usado este periodo. Se reinicia a las %s (hora del Reino Unido). Cuando está lleno, las expediciones vuelven vacías.',
 ];

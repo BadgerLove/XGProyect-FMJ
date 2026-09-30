@@ -95,4 +95,12 @@ return [
     'gl_no_missiles' => 'There are no available Interplanetary Missile',
     'gl_add_missile_number' => 'Enter the number of missiles that you want to send',
     'gl_missiles_sended' => ' interplanetary missiles were sent. Main objective: ',
+
+    // Expedition slots (30 Sep 2026)
+    'gl_exp_space' => 'Expedition space',
+    'gl_exp_fresh' => 'Fresh',
+    'gl_exp_busy' => 'Busy',
+    'gl_exp_full' => 'Full',
+    'gl_exp_used' => '%d%% used',
+    'gl_exp_tooltip' => 'Expedition space in %d:%d: %d%% used this period. Resets at %s (UK time). When it is full, expeditions come back empty.',
 ];

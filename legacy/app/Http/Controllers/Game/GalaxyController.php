@@ -232,6 +232,7 @@ class GalaxyController extends BaseController
         $parse['defense_plasma_turret'] = __('game/defenses.defense_plasma_turret');
         $parse['defense_small_shield_dome'] = __('game/defenses.defense_small_shield_dome');
         $parse['defense_large_shield_dome'] = __('game/defenses.defense_large_shield_dome');
+        $parse['expedition_space'] = $this->expeditionSpace((int) $this->_galaxy, (int) $this->_system);
 
         $parse['mip'] = ($mode == 2) ? Template::render(
             'galaxy/galaxy_missile_selector',
@@ -244,7 +245,8 @@ class GalaxyController extends BaseController
                 'galaxy' => $this->_galaxy,
                 'system' => $this->_system,
                 'planet_count' => $this->planet_count,
-                'positions' => array_values($this->buildPositionsList())
+                'positions' => array_values($this->buildPositionsList()),
+                'expedition' => $parse['expedition_space'],
             ]);
             exit;
         }
@@ -261,6 +263,33 @@ class GalaxyController extends BaseController
                 $parse
             )
         );
+    }
+
+    /**
+     * Expedition slots for the system on screen (30 Sep 2026): % of this 6-hour period's hidden slots
+     * already used. Green / amber / red; the number of slots itself is never shown.
+     *
+     * @return array{used: int, state: string, colour: string, label: string, text: string, tooltip: string, link: string}
+     */
+    private function expeditionSpace(int $galaxy, int $system): array
+    {
+        $slots = app(\App\Services\Game\Formulas\ExpeditionSlotService::class);
+        $used = $slots->usedPercent($galaxy, $system);
+        [$state, $colour] = match (true) {
+            $used >= 100 => ['full', '#c83737'],
+            $used >= 50 => ['busy', '#d69614'],
+            default => ['fresh', '#2ea043'],
+        };
+
+        return [
+            'used' => $used,
+            'state' => $state,
+            'colour' => $colour,
+            'label' => __('game/galaxy.gl_exp_' . $state) . ' · ' . sprintf(__('game/galaxy.gl_exp_used'), $used),
+            'text' => __('game/galaxy.gl_exp_space') . ': ' . sprintf(__('game/galaxy.gl_exp_used'), $used),
+            'tooltip' => sprintf(__('game/galaxy.gl_exp_tooltip'), $galaxy, $system, $used, $slots->resetsAt()),
+            'link' => 'game.php?page=fleet1&galaxy=' . $galaxy . '&system=' . $system . '&planet=16&planettype=1&target_mission=15',
+        ];
     }
 
     /**

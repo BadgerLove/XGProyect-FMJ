@@ -9,6 +9,7 @@ use App\Core\GameObjects\Ship;
 use App\Models\UsersStatistics;
 use App\Services\FormatService;
 use App\Services\Game\Formulas\ExpeditionService;
+use App\Services\Game\Formulas\ExpeditionSlotService;
 use App\Services\Game\Formulas\FleetsService;
 use Xgp\App\Libraries\FleetsLib;
 use Xgp\App\Libraries\Functions;
@@ -33,28 +34,43 @@ class Expedition extends Missions
 
     public function expeditionMission(array $fleet): void
     {
+        $expGalaxy = (int) $fleet['fleet_end_galaxy'];
+        $expSystem = (int) $fleet['fleet_end_system'];
+        $slots = app(ExpeditionSlotService::class);
+
+        // Expedition slots (30 Sep 2026): the fleet claims a slot when it ARRIVES — under 100 % it has
+        // one, at 100 % it will come back empty. Idempotent; the first processing after arrival decides.
+        $hasSlot = false;
+        if ((int) $fleet['fleet_mess'] === 0 && (int) $fleet['fleet_start_time'] <= time()) {
+            $hasSlot = $slots->claim((int) $fleet['fleet_id'], $expGalaxy, $expSystem, (int) $fleet['fleet_start_time']);
+        }
+
         // do mission
         if (parent::canStartMission($fleet)) {
             $this->setExpeditionPoints($fleet);
 
-            // Record expedition activity for depletion tracking
-            $expGalaxy = (int) $fleet['fleet_end_galaxy'];
-            $expSystem = (int) $fleet['fleet_end_system'];
-            $this->expeditionService->recordExpedition($expGalaxy, $expSystem);
-
-            // Check for probes in fleet — send depletion report
+            // Probe along: report how busy the system is this period (the % everyone sees in the galaxy)
             $fleetShips = \Xgp\App\Libraries\FleetsLib::getFleetShipsArray($fleet['fleet_array']);
             if (isset($fleetShips[210]) && $fleetShips[210] > 0) {
-                $depletionPct = $this->expeditionService->getDepletionPercent($expGalaxy, $expSystem);
                 $this->expeditionMessage(
                     (int) $fleet['fleet_owner'],
-                    sprintf('System %d:%d depletion level: %d%%', $expGalaxy, $expSystem, $depletionPct),
+                    sprintf(__('game/expedition.exp_space_report'), $expGalaxy, $expSystem, $slots->usedPercent($expGalaxy, $expSystem, (int) $fleet['fleet_start_time'])),
                     (int) $fleet['fleet_end_stay'],
                     ['galaxy' => $expGalaxy, 'system' => $expSystem, 'planet' => $fleet['fleet_end_planet']]
                 );
             }
 
-            switch ($this->expeditionService->getExpeditionResultFromDeck((int) $fleet['fleet_owner'], $expGalaxy, $expSystem)) {
+            $slots->forget((int) $fleet['fleet_id']);
+
+            // Arrived when the system was full: the region has been picked clean, no card drawn
+            if (!$hasSlot) {
+                $this->resultPickedClean($fleet);
+
+                return;
+            }
+
+            // (0, 0): the old wear no longer nudges results — slots replaced it
+            switch ($this->expeditionService->getExpeditionResultFromDeck((int) $fleet['fleet_owner'], 0, 0)) {
                 case 'darkMatter':
                     $this->resultDarkMatter($fleet);
                     break;
@@ -645,6 +661,23 @@ class Expedition extends Missions
                 parent::removeFleet($fleet['fleet_id']);
             }
         }
+    }
+
+    /** Arrived at a system whose slots were all used this period (expedition slots, 30 Sep 2026). */
+    private function resultPickedClean(array $fleet): void
+    {
+        $this->expeditionMessage(
+            $fleet['fleet_owner'],
+            __('game/expedition.exp_picked_clean_' . mt_rand(1, 3)),
+            (int) $fleet['fleet_end_stay'],
+            [
+                'galaxy' => $fleet['fleet_end_galaxy'],
+                'system' => $fleet['fleet_end_system'],
+                'planet' => $fleet['fleet_end_planet'],
+            ]
+        );
+
+        parent::returnFleet($fleet['fleet_id']);
     }
 
     private function resultNothing(array $fleet): void
