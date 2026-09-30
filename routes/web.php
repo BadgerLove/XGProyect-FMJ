@@ -28,13 +28,18 @@ Route::get('combatreport/shared/{token}', [CombatreportController::class, 'share
 
 Route::prefix('game/battle-simulator')->group(function () {
     Route::post('/simulate', [BattleSim::class, 'simulate'])->name('battlesimulator.simulate');
+    // Admins only (2026-09-30): it was open to anyone, and every hit makes all pages recompile.
+    // Not logged in -> the admin login page; logged in without admin rights -> 403.
     Route::get('/clear-cache', function () {
+        if ((int) (\Illuminate\Support\Facades\Auth::user()->authlevel ?? 0) < \Xgp\App\Core\Enumerators\UserRanksEnumerator::ADMIN) {
+            abort(403);
+        }
         if (function_exists('opcache_reset')) { opcache_reset(); }
         if (function_exists('apcu_clear_cache')) { apcu_clear_cache(); }
         \Illuminate\Support\Facades\Cache::flush();
         \Illuminate\Support\Facades\Artisan::call('view:clear');
         return response()->json(['status' => 'ok', 'opcache' => function_exists('opcache_reset')]);
-    })->name('battlesimulator.clear-cache');
+    })->middleware('admin.auth')->name('battlesimulator.clear-cache');
 });
 
 // Stateless AJAX routes — no sessions needed, prevents CSRF 419 race on first page load

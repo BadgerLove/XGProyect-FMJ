@@ -6,9 +6,9 @@ namespace Xgp\App\Libraries;
 
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Hash;
 use Xgp\App\Core\Concerns\PreparesLegacySql;
 use Xgp\App\Core\Enumerators\AllianceRanksEnumerator as AllianceRanks;
+use App\Services\SessionService;
 use App\Services\SettingsService;
 use Xgp\App\Core\Enumerators\SwitchIntEnumerator as SwitchInt;
 use Xgp\App\Libraries\Alliance\Ranks;
@@ -251,7 +251,7 @@ class Users
             Functions::redirect(SYSTEM_ROOT);
         }
 
-        if (!Hash::check(($userRow['password'] . '-' . config('SECRETWORD')), session('user_password'))) {
+        if (!app(SessionService::class)->checkPasswordToken((string) $userRow['password'], session('user_password'))) {
             Functions::redirect(SYSTEM_ROOT);
         }
     }

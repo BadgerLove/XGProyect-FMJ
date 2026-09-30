@@ -79,6 +79,9 @@ class SettingsService
                     ['value' => $value]
                 );
 
+            // The service is a singleton now: re-read on next use so this request sees the new value
+            $this->settings = [];
+
             return true;
         }
 

@@ -30,6 +30,14 @@ class ExpeditionSlotService
         7 => 50, 8 => 35, 9 => 25, 10 => 15, 11 => 12, 12 => 9, 13 => 7, 14 => 4, 15 => 3,
     ];
 
+    /**
+     * fleet_id => granted, for claims already decided. Bound as a singleton (AppServiceProvider)
+     * so it lives for one page request, or one bot tick.
+     *
+     * @var array<int, bool|int>|null
+     */
+    private ?array $claims = null;
+
     /** Start (unix) of the 6-hour window $ts falls in. */
     public function windowStart(int $ts): int
     {
@@ -94,15 +102,23 @@ class ExpeditionSlotService
      */
     public function claim(int $fleetId, int $galaxy, int $system, int $arrivalTs): bool
     {
+        // Every held expedition comes through here on every page load until its hold ends (211 of
+        // them = 214 queries a page, 2026-09-30), so read all decided claims once. A decided claim
+        // never changes until forget(); anything not in the list falls through to the database.
+        $this->claims ??= DB::table('expedition_claims')->pluck('granted', 'fleet_id')->all();
+        if (array_key_exists($fleetId, $this->claims)) {
+            return (bool) $this->claims[$fleetId];
+        }
+
         $existing = DB::table('expedition_claims')->where('fleet_id', $fleetId)->value('granted');
         if ($existing !== null) {
-            return (bool) $existing;
+            return $this->claims[$fleetId] = (bool) $existing;
         }
 
         $windowStart = $this->windowStart($arrivalTs);
         $this->window($galaxy, $system, $windowStart);
 
-        return (bool) DB::transaction(function () use ($fleetId, $galaxy, $system, $windowStart): bool {
+        return $this->claims[$fleetId] = (bool) DB::transaction(function () use ($fleetId, $galaxy, $system, $windowStart): bool {
             $inserted = DB::table('expedition_claims')->insertOrIgnore([
                 'fleet_id' => $fleetId,
                 'galaxy' => $galaxy,
@@ -137,6 +153,7 @@ class ExpeditionSlotService
     /** Drop a fleet's claim once its expedition is resolved. */
     public function forget(int $fleetId): void
     {
+        unset($this->claims[$fleetId]);
         DB::table('expedition_claims')->where('fleet_id', $fleetId)->delete();
     }
 
