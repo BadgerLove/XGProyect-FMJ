@@ -176,6 +176,7 @@
                 </form>
 			</div>
 		</div>
+		@include('home.countdown')
 		<div id="content" class="clearfix">
 			<div id="subscribe">
                 <form id="subscribeForm" name="subscribeForm" method="POST" onsubmit="changeAction(&#39;register&#39;,&#39;subscribeForm&#39;);" action="">
