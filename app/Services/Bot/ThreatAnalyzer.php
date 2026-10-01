@@ -22,7 +22,6 @@ class ThreatAnalyzer
      */
     public function analyzeThreats(array $botPlanet): array
     {
-        $prefix = DB::getTablePrefix();
         $botGalaxy = (int) $botPlanet['planet_galaxy'];
         $botSystem = (int) $botPlanet['planet_system'];
         $botUserId = (int) $botPlanet['planet_user_id'];
@@ -30,36 +29,49 @@ class ThreatAnalyzer
         $systemMin = max(1, $botSystem - 10);
         $systemMax = $botSystem + 10;
 
-        // Get aggregate ship/defense counts in the neighborhood
-        $rows = DB::select(
-            "SELECT
-                SUM(s.`ship_small_cargo_ship`) AS total_small_cargo,
-                SUM(s.`ship_big_cargo_ship`) AS total_big_cargo,
-                SUM(s.`ship_light_fighter`) AS total_light_fighter,
-                SUM(s.`ship_heavy_fighter`) AS total_heavy_fighter,
-                SUM(s.`ship_cruiser`) AS total_cruiser,
-                SUM(s.`ship_battleship`) AS total_battleship,
-                SUM(s.`ship_destroyer`) AS total_destroyer,
-                SUM(s.`ship_deathstar`) AS total_deathstar,
-                SUM(d.`defense_rocket_launcher`) AS total_rocket_launcher,
-                SUM(d.`defense_light_laser`) AS total_light_laser,
-                SUM(d.`defense_heavy_laser`) AS total_heavy_laser,
-                SUM(d.`defense_gauss_cannon`) AS total_gauss_cannon,
-                SUM(d.`defense_ion_cannon`) AS total_ion_cannon,
-                SUM(d.`defense_plasma_turret`) AS total_plasma_turret,
-                COUNT(*) AS neighbor_count
-            FROM `{$prefix}planets` AS p
-            INNER JOIN `{$prefix}ships` AS s ON s.`ship_planet_id` = p.`planet_id`
-            INNER JOIN `{$prefix}defenses` AS d ON d.`defense_planet_id` = p.`planet_id`
-            WHERE p.`planet_galaxy` = ?
-                AND p.`planet_system` BETWEEN ? AND ?
-                AND p.`planet_type` = 1
-                AND p.`planet_destroyed` = 0
-                AND p.`planet_user_id` != ?",
-            [$botGalaxy, $systemMin, $systemMax, $botUserId]
-        );
+        // Dale's rule (2026-10-01): bots only use what a player could see. This summed every
+        // neighbour's LIVE ships and defences. Now: the bot's own newest unexpired spy report per
+        // planet within +-10 systems, plus the fleets that actually attacked it in the last 7 days
+        // (its own battle reports).
+        $units = [];
+        $seen = [];
+        $reports = DB::table('bot_intel')
+            ->where('bot_user_id', $botUserId)
+            ->where('galaxy', $botGalaxy)
+            ->whereBetween('system', [$systemMin, $systemMax])
+            ->where('expires_at', '>', time())
+            ->orderByDesc('scanned_at')
+            ->get(['system', 'planet', 'fleet_data', 'defense_data']);
+        foreach ($reports as $report) {
+            $key = "{$report->system}:{$report->planet}";
+            if (isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+            foreach ((json_decode((string) $report->fleet_data, true) ?: []) + (json_decode((string) $report->defense_data, true) ?: []) as $id => $count) {
+                $units[(int) $id] = ($units[(int) $id] ?? 0) + (int) $count;
+            }
+        }
+        $attacks = DB::table('bot_combat_log')
+            ->where('defender_id', $botUserId)
+            ->where('created_at', '>', now()->subDays(7))
+            ->pluck('attacker_fleet');
+        foreach ($attacks as $json) {
+            foreach ((json_decode((string) $json, true) ?: []) as $id => $count) {
+                $units[(int) $id] = ($units[(int) $id] ?? 0) + (int) $count;
+            }
+        }
 
-        $neighborhood = (array) ($rows[0] ?? []);
+        $neighborhood = [
+            'total_small_cargo' => $units[202] ?? 0, 'total_big_cargo' => $units[203] ?? 0,
+            'total_light_fighter' => $units[204] ?? 0, 'total_heavy_fighter' => $units[205] ?? 0,
+            'total_cruiser' => $units[206] ?? 0, 'total_battleship' => $units[207] ?? 0,
+            'total_destroyer' => $units[213] ?? 0, 'total_deathstar' => $units[214] ?? 0,
+            'total_rocket_launcher' => $units[401] ?? 0, 'total_light_laser' => $units[402] ?? 0,
+            'total_heavy_laser' => $units[403] ?? 0, 'total_gauss_cannon' => $units[404] ?? 0,
+            'total_ion_cannon' => $units[405] ?? 0, 'total_plasma_turret' => $units[406] ?? 0,
+            'neighbor_count' => count($seen),
+        ];
 
         // Calculate threat composition
         $totalShips = (int) ($neighborhood['total_light_fighter'] ?? 0)

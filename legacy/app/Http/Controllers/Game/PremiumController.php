@@ -74,6 +74,11 @@ class PremiumController extends BaseController
                 $price = $this->getOfficierPrice($data['offi'], $time);
                 $officier = $this->objects->getObjects($data['offi']);
 
+                // a permanent officer can't be bought (adding time would overflow the INT column)
+                if ($this->officerService->isPermanent((int) $this->user[$officier])) {
+                    Functions::redirect('game.php?page=premium');
+                }
+
                 if ($this->officerService->isOfficerActive((int) $this->user[$officier], time())) {
                     $time_to_add = $this->user[$officier] + $set_time;
                 } else {
@@ -128,12 +133,17 @@ class PremiumController extends BaseController
         $item_to_parse['img_small'] = $this->getOfficierImage($item_id, 'img_small');
         $item_to_parse['link_month'] = 'game.php?page=premium&offi=' . $item_id . '&time=month';
         $item_to_parse['link_week'] = 'game.php?page=premium&offi=' . $item_id . '&time=week';
+        $item_to_parse['permanent'] = $this->officerService->isPermanent((int) $this->user[$this->objects->getObjects($item_id)]);
 
         return $item_to_parse;
     }
 
     private function setOfficierStatusWithFormat(int $item_id): string
     {
+        if ($this->officerService->isPermanent((int) $this->user[$this->objects->getObjects($item_id)])) {
+            return $this->formatService->customColor(__('game/officier.of_permanent'), 'lime');
+        }
+
         if ($this->officerService->isOfficerActive((int) $this->user[$this->objects->getObjects($item_id)], time())) {
             // was the raw float of days left ("12.746840277778"); now "12d 17h"
             $left = max(0, (int) $this->user[$this->objects->getObjects($item_id)] - time());

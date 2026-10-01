@@ -638,7 +638,7 @@ class BotBrain
             $slowest = max($slowest, ($cost[$res] - $have) / $this->hourly($planet, $res));
         }
 
-        if ($slowest > self::MAX_SAVE_HOURS) {
+        if ($slowest > BotSpeed::hours(self::MAX_SAVE_HOURS)) {
             return self::FALL_THROUGH;
         }
 
@@ -868,7 +868,7 @@ class BotBrain
             }
 
             $doir = ROICalculator::calcBuildingDOIR($planet, $mineId, $level);
-            if ($doir > self::MAX_DOIR_DAYS && $level >= 10) {
+            if ($doir > BotSpeed::hours(self::MAX_DOIR_DAYS) && $level >= 10) {
                 continue;
             }
 

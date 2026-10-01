@@ -6,6 +6,7 @@ return [
     'of_title' => 'Oficiales',
     'of_recruit' => 'Reclutar',
     'of_inactive' => 'Inactivo',
+    'of_permanent' => 'Permanente',
     'of_darkmatter_description' => 'La Materia Oscura es una sustancia que desde hace apenas unos años se puede almacenar, y aun así esto representa grandes dificultades. De ella se pueden extraer increíbles cantidades de energía. El proceso que se requiere para producir Materia Oscura es complejo y arriesgado, por lo que se ha convertido en un bien muy valioso. ¡Sólo la materia oscura comprada que aún no se ha consumido protege una cuenta de su eliminación!',
     'of_darkmatter_description_short' => 'El comandante y los oficiales pueden ser contratados con esta sustancia rara.',
     'of_get_darkmatter' => 'Obtener materia oscura',

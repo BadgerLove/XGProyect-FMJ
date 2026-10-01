@@ -37,6 +37,12 @@ class AllianceCoordinator
      */
     public function findDefensiveOpportunity(array $botPlanet, int $allyId = 0): ?array
     {
+        // Off since 2026-10-01 (Dale's rule: bots only use what a player could see). It read
+        // fleets attacking OTHER players straight from the database, which a player can only
+        // see with a sensor phalanx; and at x1 support flights could never land inside its
+        // 30-minute window anyway.
+        return null;
+
         if ($allyId <= 0) {
             return null;
         }

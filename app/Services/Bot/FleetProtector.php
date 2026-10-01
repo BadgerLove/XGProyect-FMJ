@@ -16,6 +16,9 @@ use Xgp\App\Libraries\FleetsLib;
  */
 class FleetProtector
 {
+    /** Assumed strength per ship when the bot's espionage is too low to see the make-up (~ a heavy fighter). */
+    private const UNSEEN_SHIP_STRENGTH = 150;
+
     use PreparesLegacySql;
 
     public function __construct(
@@ -64,9 +67,16 @@ class FleetProtector
 
         $attacks = [];
 
+        // A player sees an incoming fleet's exact make-up only from espionage 8 (FleetsLib); below
+        // that, just how many ships. Same for bots (2026-10-01): guess the strength from the count.
+        $espionage = (int) DB::table('research')->where('research_user_id', (int) $botPlanet['planet_user_id'])
+            ->value('research_espionage_technology');
+
         foreach ($rows as $row) {
             $ships = FleetsLib::getFleetShipsArray((string) $row->fleet_array);
-            $strength = $this->calculateFleetStrength($ships);
+            $strength = $espionage >= 8
+                ? $this->calculateFleetStrength($ships)
+                : (int) $row->fleet_amount * self::UNSEEN_SHIP_STRENGTH;
 
             $attacks[] = [
                 'fleet_id'      => (int) $row->fleet_id,

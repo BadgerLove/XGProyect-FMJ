@@ -6,6 +6,7 @@ return [
     'of_title' => 'Officers',
     'of_recruit' => 'Recruit',
     'of_inactive' => 'Inactive',
+    'of_permanent' => 'Permanent',
     'of_darkmatter_description' => 'Dark Matter is a substance for which storage has only been possible for a few standard years and still requires a lot of effort. It can be processed to produce unimaginable quantities of energy. The methods used to gain Dark Matter are complex and full of risks, making it very valuable. Only Dark Matter that has been bought and is still available protects an account from deletion!',
     'of_darkmatter_description_short' => 'Commander and officers can be hired with this rare substance.',
     'of_get_darkmatter' => 'Get dark matter',

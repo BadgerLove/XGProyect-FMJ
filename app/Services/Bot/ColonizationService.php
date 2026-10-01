@@ -79,7 +79,7 @@ class ColonizationService
 
         $from = max(1, $home - self::SEARCH_RADIUS);
         $to = min(MAX_SYSTEM_IN_GALAXY, $home + self::SEARCH_RADIUS);
-        $taken = $this->takenSlots($galaxy, $from, $to);
+        $taken = $this->takenSlots($galaxy, $from, $to, $botId);
 
         for ($offset = 0; $offset <= self::SEARCH_RADIUS; $offset++) {
             foreach ($offset === 0 ? [0] : [-$offset, $offset] as $delta) {
@@ -103,7 +103,7 @@ class ColonizationService
             }
 
             $system = random_int(1, MAX_SYSTEM_IN_GALAXY);
-            $taken = $this->takenSlots($g, $system, $system);
+            $taken = $this->takenSlots($g, $system, $system, $botId);
             foreach ($slots as $slot) {
                 if (!isset($taken["{$system}:{$slot}"])) {
                     return ['galaxy' => $g, 'system' => $system, 'planet' => $slot];
@@ -140,7 +140,7 @@ class ColonizationService
      *
      * @return array<string, true>
      */
-    private function takenSlots(int $galaxy, int $from, int $to): array
+    private function takenSlots(int $galaxy, int $from, int $to, int $botId): array
     {
         $taken = [];
 
@@ -153,7 +153,9 @@ class ColonizationService
             $taken["{$row->planet_system}:{$row->planet_planet}"] = true;
         }
 
+        // only the bot's OWN colony ships in flight: other players' are invisible to a player (2026-10-01)
         $flying = DB::table('fleets')
+            ->where('fleet_owner', $botId)
             ->where('fleet_mission', 7)
             ->where('fleet_mess', 0)
             ->where('fleet_end_galaxy', $galaxy)

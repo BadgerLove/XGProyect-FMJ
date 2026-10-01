@@ -376,7 +376,7 @@ class IntelService
             'fleet_data'      => json_encode($intel['fleet']),
             'defense_data'    => json_encode($intel['defense']),
             'scanned_at'      => $messageTime,
-            'expires_at'      => $messageTime + self::INTEL_TTL,
+            'expires_at'      => $messageTime + BotSpeed::seconds(self::INTEL_TTL),
         ]);
     }
 

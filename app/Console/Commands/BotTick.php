@@ -7,6 +7,7 @@ namespace App\Console\Commands;
 use App\Models\Planets;
 use App\Models\User;
 use App\Services\Bot\BotBrain;
+use App\Services\Bot\BotSpeed;
 use App\Services\Bot\AllianceCoordinator;
 use App\Services\Bot\BattleSimulator;
 use App\Services\Bot\ColonizationService;
@@ -914,7 +915,7 @@ class BotTick extends Command
                     // being hit every tick, and about half of those probe flights get shot down
                     // (Spy.php: detection chance scales with the target's fleet) — 3K crystal a go.
                     $key = "{$spyTarget['galaxy']}:{$spyTarget['system']}:{$spyTarget['planet']}";
-                    if (time() - ($latestScan[$key] ?? 0) < self::SPY_REFRESH_SECONDS) {
+                    if (time() - ($latestScan[$key] ?? 0) < BotSpeed::seconds(self::SPY_REFRESH_SECONDS)) {
                         continue;
                     }
 
@@ -1006,7 +1007,7 @@ class BotTick extends Command
                 foreach ($candidates as $intelTarget) {
                     if ($candidatesTried >= self::ATTACK_CANDIDATES) break;
 
-                    if ($intelTarget['total_resources'] < self::ATTACK_MIN_RESOURCES) continue; // not worth the fuel
+                    if ($intelTarget['total_resources'] < BotSpeed::amount(self::ATTACK_MIN_RESOURCES)) continue; // not worth the fuel
 
                     // Fix 1 (13 Sep): rejected recently — no sim, no re-probe, doesn't use up a candidate slot.
                     $skipKey = "{$intelTarget['galaxy']}:{$intelTarget['system']}:{$intelTarget['planet']}";
@@ -1057,7 +1058,7 @@ class BotTick extends Command
                     $intelTarget['distance'] = $distance;
                     $intelTarget['resources'] = $intelTarget['total_resources'];
                     $intelTarget['user_id'] = $defenderId;
-                    $intelTarget['planet_data'] = $this->buildDefenderFromIntel($intelTarget);
+                    $intelTarget['planet_data'] = $this->buildDefenderFromIntel($intelTarget, (int) $bot->id, $user);
                     $candidatesTried++;
 
                     $coords = "{$intelTarget['galaxy']}:{$intelTarget['system']}:{$intelTarget['planet']}";
@@ -1065,7 +1066,7 @@ class BotTick extends Command
                     $isHumanTarget = $this->isHumanPlayer($defenderId);
 
                     // Humans run on the 6-hour shared cycle (fix 2); the sim merges live ships/defences anyway.
-                    if ($intelAge > ($isHumanTarget ? self::HUMAN_INTEL_SHARE_SECONDS : self::INTEL_MAX_AGE)) {
+                    if ($intelAge > BotSpeed::seconds($isHumanTarget ? self::HUMAN_INTEL_SHARE_SECONDS : self::INTEL_MAX_AGE)) {
                         $staleTarget ??= $intelTarget;
                         if ($dryRun) {
                             $this->line("  [{$bot->id}] STALE: {$coords} res={$intelTarget['total_resources']} age=" . intdiv($intelAge, 60) . "m");
@@ -1091,7 +1092,7 @@ class BotTick extends Command
                     // Fix 1 (13 Sep): the engine said no to a human planet — don't come back for a while.
                     if ($isHumanTarget) {
                         $this->rememberUnwinnable($bot->id, $intelTarget, $dryRun);
-                        $skips[$coords] = time() + self::UNWINNABLE_SKIP_SECONDS;
+                        $skips[$coords] = time() + BotSpeed::seconds(self::UNWINNABLE_SKIP_SECONDS);
                     }
                 }
             }
@@ -1873,7 +1874,7 @@ class BotTick extends Command
      * @param  array{metal: int, crystal: int, deuterium: int, fleet_data: array, defense_data: array}  $intel
      * @return array<string, mixed>
      */
-    private function buildDefenderFromIntel(array $intel): array
+    private function buildDefenderFromIntel(array $intel, int $botId = 0, array $ownUser = []): array
     {
         $planet = [
             'planet_metal'     => $intel['metal'] ?? 0,
@@ -1908,46 +1909,27 @@ class BotTick extends Command
             $planet[$column] = ($intel['defense_data'][$id] ?? 0);
         }
 
-        // Veto against stale fleet intel (6 Sep 09:30 results): raids of 4-26 ships were sent at
-        // planets the report showed as empty and met 400-1,100 ships — the target's fleet was away
-        // when probed and home when the raid landed. Take the LARGER of the report and the live
-        // ships/defences per unit type, so the simulator can be surprised upwards never downwards.
-        // (Dale's 5 Sep proposal. Resources for the loot estimate still come from the report.)
-        $live = $this->liveDefender((int) ($intel['galaxy'] ?? 0), (int) ($intel['system'] ?? 0), (int) ($intel['planet'] ?? 0));
-        foreach (array_merge($shipMap, $defenseMap) as $column) {
-            $planet[$column] = max((int) $planet[$column], (int) ($live[$column] ?? 0));
+        // Dale's rule (2026-10-01): bots only use what a player could see. This used to take the
+        // larger of the report and the target's LIVE ships/defences (6 Sep fix for fleets that were
+        // away when probed), and read the defender's real research. Now, like a player: the report,
+        // raised to whatever this bot met at those coordinates in its own last battle there (its
+        // own battle report), and its OWN tech as the guess for the defender's tech.
+        foreach ($this->lastMetDefender($botId, (int) ($intel['galaxy'] ?? 0), (int) ($intel['system'] ?? 0), (int) ($intel['planet'] ?? 0)) as $id => $count) {
+            $column = $shipMap[$id] ?? $defenseMap[$id] ?? null;
+            if ($column !== null) {
+                $planet[$column] = max((int) $planet[$column], (int) $count);
+            }
         }
 
-        // Defender tech. Spy reports don't carry it at 3 probes and the simulator was scoring
-        // every defender at weapons/shield/armour 0 while bots average 11 / 9.5 / 11.7 — first
-        // live tick of fix I (6 Sep): 41 wins but 11 total wipe-outs and 6 draws the sim had
-        // approved. Read the real research row instead (one query per defender per tick).
-        $targetUserId = (int) ($intel['user_id'] ?? 0);
-        if ($targetUserId > 0) {
-            if (!array_key_exists($targetUserId, $this->defenderTechCache)) {
-                $prefix = DB::getTablePrefix();
-                $row = DB::selectOne(
-                    "SELECT research_weapons_technology, research_shielding_technology, research_armour_technology
-                    FROM `{$prefix}research` WHERE `research_user_id` = ?",
-                    [$targetUserId]
-                );
-                $this->defenderTechCache[$targetUserId] = $row ? [
-                    'research_weapons_technology' => (int) $row->research_weapons_technology,
-                    'research_shielding_technology' => (int) $row->research_shielding_technology,
-                    'research_armour_technology' => (int) $row->research_armour_technology,
-                ] : [];
-            }
-            $planet += $this->defenderTechCache[$targetUserId];
+        foreach (['research_weapons_technology', 'research_shielding_technology', 'research_armour_technology'] as $tech) {
+            $planet[$tech] = (int) ($ownUser[$tech] ?? 0);
         }
 
         return $planet;
     }
 
-    /** Defender research rows looked up this tick: user id => research_* columns. */
-    private array $defenderTechCache = [];
-
-    /** Live ships + defences rows looked up this tick: "g:s:p" => columns. */
-    private array $liveDefenderCache = [];
+    /** What this bot met in its last battle at a target, this tick: "bot:g:s:p" => [unit id => count]. */
+    private array $lastMetCache = [];
 
     /** True for a human player (users.bot_profile IS NULL). Cached for the tick. */
     private function isHumanPlayer(int $userId): bool
@@ -1994,7 +1976,7 @@ class BotTick extends Command
         }
         DB::table('bot_target_skip')->updateOrInsert(
             ['bot_user_id' => $botId, 'galaxy' => (int) $target['galaxy'], 'system' => (int) $target['system'], 'planet' => (int) $target['planet']],
-            ['until' => time() + self::UNWINNABLE_SKIP_SECONDS, 'set_at' => time(), 'reason' => 'sim-rejected']
+            ['until' => time() + BotSpeed::seconds(self::UNWINNABLE_SKIP_SECONDS), 'set_at' => time(), 'reason' => 'sim-rejected']
         );
     }
 
@@ -2006,11 +1988,20 @@ class BotTick extends Command
      */
     private function borrowHumanIntel(int $botId, int $galaxy, int $system, int $planet, int $ownLatest, bool $dryRun): int
     {
+        // Dale's rule (2026-10-01): a player only sees spy reports his alliance shares. Bots without
+        // an alliance never borrow; inside one they only borrow from alliance members.
+        $allyId = (int) DB::table('users')->where('id', $botId)->value('ally_id');
+        if ($allyId <= 0) {
+            return 0;
+        }
+        $members = DB::table('users')->where('ally_id', $allyId)->pluck('id')->all();
+
         $row = DB::table('bot_intel')
+            ->whereIn('bot_user_id', $members)
             ->where('galaxy', $galaxy)
             ->where('system', $system)
             ->where('planet', $planet)
-            ->where('scanned_at', '>', time() - self::HUMAN_INTEL_SHARE_SECONDS)
+            ->where('scanned_at', '>', time() - BotSpeed::seconds(self::HUMAN_INTEL_SHARE_SECONDS))
             ->where('expires_at', '>', time())
             ->orderByDesc('scanned_at')
             ->first();
@@ -2030,29 +2021,26 @@ class BotTick extends Command
     }
 
     /**
-     * Current ships + defences on a planet (empty array if the planet doesn't exist).
+     * The defender's units in this bot's own most recent battle at those coordinates (its own battle
+     * report; empty if it never fought there).
      *
-     * @return array<string, mixed>
+     * @return array<int, int> unit id => count
      */
-    private function liveDefender(int $galaxy, int $system, int $planet): array
+    private function lastMetDefender(int $botId, int $galaxy, int $system, int $planet): array
     {
-        $key = "{$galaxy}:{$system}:{$planet}";
+        $key = "{$botId}:{$galaxy}:{$system}:{$planet}";
 
-        if (!array_key_exists($key, $this->liveDefenderCache)) {
-            $prefix = DB::getTablePrefix();
-            $row = DB::selectOne(
-                "SELECT s.*, d.*
-                FROM `{$prefix}planets` AS p
-                INNER JOIN `{$prefix}ships` AS s ON s.`ship_planet_id` = p.`planet_id`
-                INNER JOIN `{$prefix}defenses` AS d ON d.`defense_planet_id` = p.`planet_id`
-                WHERE p.`planet_galaxy` = ? AND p.`planet_system` = ? AND p.`planet_planet` = ? AND p.`planet_type` = 1
-                LIMIT 1",
-                [$galaxy, $system, $planet]
-            );
-            $this->liveDefenderCache[$key] = $row ? (array) $row : [];
+        if (!array_key_exists($key, $this->lastMetCache)) {
+            $json = $botId > 0 ? DB::table('bot_combat_log')
+                ->where('attacker_id', $botId)
+                ->where('target_coords', "{$galaxy}:{$system}:{$planet}")
+                ->orderByDesc('id')
+                ->value('defender_fleet') : null;
+            $decoded = json_decode((string) $json, true);
+            $this->lastMetCache[$key] = is_array($decoded) ? array_map('intval', $decoded) : [];
         }
 
-        return $this->liveDefenderCache[$key];
+        return $this->lastMetCache[$key];
     }
 
     private function getShipName(int $shipId): string
@@ -2221,9 +2209,11 @@ class BotTick extends Command
      */
     private function pickExpeditionSystem(int $galaxy, int $homeSystem, int $botId): int
     {
-        $span = 2 * self::EXPEDITION_RANGE; // offsets -RANGE..-1, 1..RANGE
+        // x1: flights take 5x longer, so expeditions stay closer to home (20 systems at x5, 4 at x1)
+        $range = max(4, (int) round(self::EXPEDITION_RANGE / max(1.0, BotSpeed::factor())));
+        $span = 2 * $range; // offsets -RANGE..-1, 1..RANGE
         $step = ($botId + (int) (time() / 3600)) % $span;
-        $offset = $step < self::EXPEDITION_RANGE ? $step - self::EXPEDITION_RANGE : $step - self::EXPEDITION_RANGE + 1;
+        $offset = $step < $range ? $step - $range : $step - $range + 1;
         $system = $homeSystem + $offset;
 
         if ($system < 1 || $system > MAX_SYSTEM_IN_GALAXY) {

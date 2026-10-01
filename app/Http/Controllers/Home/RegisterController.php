@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\Home;
 
+use App\Services\Game\Formulas\OfficerService;
 use App\Http\Requests\RegisterRequest;
 use App\Mail\Welcome;
 use App\Services\Game\PlanetService;
@@ -66,11 +67,12 @@ class RegisterController extends BaseController
             $newUser->preferences()->create();
             $newUser->premium()->create([
                 'premium_dark_matter' => $this->settingsService->getInt('registration_dark_matter'),
-                'premium_officier_commander' => 1,
-                'premium_officier_admiral' => 1,
-                'premium_officier_engineer' => 1,
-                'premium_officier_geologist' => 1,
-                'premium_officier_technocrat' => 1,
+                // every player has all officers for ever (2026-10-01)
+                'premium_officier_commander' => OfficerService::PERMANENT,
+                'premium_officier_admiral' => OfficerService::PERMANENT,
+                'premium_officier_engineer' => OfficerService::PERMANENT,
+                'premium_officier_geologist' => OfficerService::PERMANENT,
+                'premium_officier_technocrat' => OfficerService::PERMANENT,
             ]);
             $newUser->research()->create();
             $newUser->stats()->create();

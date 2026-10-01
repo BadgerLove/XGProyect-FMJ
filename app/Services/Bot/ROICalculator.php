@@ -23,7 +23,8 @@ class ROICalculator
     /**
      * Server resource multiplier (from options table).
      */
-    private const SERVER_SPEED = 5;
+    // production uses the universe's real resource_multiplier (BotSpeed::multiplier()); this was a
+    // hard-coded 5 (SERVER_SPEED), wrong at x1 and in the simulator (2026-10-01)
 
     /**
      * Average planet temperature (used for deuterium production calc).
@@ -179,7 +180,7 @@ class ROICalculator
         $positionBonus = self::getPositionMetalBonus($position);
         $baseProd = 30 * $positionBonus;
 
-        return $baseProd * $level * pow(1.1, $level) * self::SERVER_SPEED;
+        return $baseProd * $level * pow(1.1, $level) * BotSpeed::multiplier();
     }
 
     /**
@@ -194,7 +195,7 @@ class ROICalculator
         $positionBonus = self::getPositionCrystalBonus($position);
         $baseProd = 20 * $positionBonus;
 
-        return $baseProd * $level * pow(1.1, $level) * self::SERVER_SPEED;
+        return $baseProd * $level * pow(1.1, $level) * BotSpeed::multiplier();
     }
 
     /**
@@ -208,7 +209,7 @@ class ROICalculator
         $temp = self::DEFAULT_TEMP; // Could use planet temp if available
         $tempFactor = (-0.004 * $temp) + 1.36;
 
-        return 10 * $level * pow(1.1, $level) * $tempFactor * self::SERVER_SPEED;
+        return 10 * $level * pow(1.1, $level) * $tempFactor * BotSpeed::multiplier();
     }
 
     /**

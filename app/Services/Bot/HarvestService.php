@@ -46,7 +46,7 @@ class HarvestService
         $metal = (int) ($planet['planet_debris_metal'] ?? 0);
         $crystal = (int) ($planet['planet_debris_crystal'] ?? 0);
 
-        if ($metal + $crystal < self::MIN_DEBRIS_VALUE) {
+        if ($metal + $crystal < BotSpeed::amount(self::MIN_DEBRIS_VALUE)) {
             return null;
         }
 
@@ -96,8 +96,8 @@ class HarvestService
                 )
             ORDER BY c.id DESC",
             $allyId > 0
-                ? [self::MIN_DEBRIS_VALUE, $botId, $botId, $allyId]
-                : [self::MIN_DEBRIS_VALUE, $botId, $botId]
+                ? [BotSpeed::amount(self::MIN_DEBRIS_VALUE), $botId, $botId, $allyId]
+                : [BotSpeed::amount(self::MIN_DEBRIS_VALUE), $botId, $botId]
         );
 
         // One candidate per set of coordinates — the field is shared by every battle fought there
@@ -135,7 +135,7 @@ class HarvestService
             [$metal, $crystal] = $this->liveDebris($field['galaxy'], $field['system'], $field['planet']);
             $value = $metal + $crystal;
 
-            if ($value < self::MIN_DEBRIS_VALUE) {
+            if ($value < BotSpeed::amount(self::MIN_DEBRIS_VALUE)) {
                 // Somebody else got there first — stop re-checking these rows
                 $this->markRowsHarvested($field['ids'], 0);
                 continue;

@@ -9,15 +9,27 @@ use Xgp\App\Core\Concerns\PreparesLegacySql;
 use Xgp\App\Libraries\FleetsLib;
 
 /**
- * Scans the galaxy neighborhood for profitable attack targets.
+ * Picks which neighbouring planets a bot should spy on next.
+ *
+ * Dale's rule (2026-10-01): bots only use what a player could see. This used to rank planets by
+ * their LIVE resources, ships, defences and research and the owner's exact last-online time.
+ * Now it uses what a player has: the galaxy view (who is where, the admin/vacation markers, the
+ * i/I inactive flags, noob protection by highscore points) and the bot's OWN spy reports.
+ * A planet the bot has a report on scores by that report (resources minus strength, older
+ * reports count for less); a planet it has never looked at gets a modest "worth a look" score.
  */
 class TargetScanner
 {
     use PreparesLegacySql;
 
+    /** What an unscanned planet is worth looking at, before distance and inactivity. */
+    private const UNSCANNED_SCORE = 1.0;
+
+    /** Galaxy-view inactive flags: i = 7 days, I = 28 days (GalaxyLib). */
+    private const INACTIVE_DAYS = 7;
+    private const LONG_INACTIVE_DAYS = 28;
+
     /**
-     * Scan for attack targets near a bot's planet.
-     *
      * @param  array<string, mixed>  $botPlanet
      * @return list<array{planet_id: int, user_id: int, galaxy: int, system: int, planet: int, resources: int, defense_strength: int, distance: int, score: float, last_active: int}>
      */
@@ -30,50 +42,15 @@ class TargetScanner
 
         $systemMin = max(1, $botSystem - $range);
         $systemMax = $botSystem + $range;
-
         $prefix = DB::getTablePrefix();
 
+        // galaxy-view facts only: position, owner, admin/vacation markers, how long inactive
         $rows = DB::select(
-            "SELECT
-                p.`planet_id`,
-                p.`planet_user_id`,
-                p.`planet_galaxy`,
-                p.`planet_system`,
-                p.`planet_planet`,
-                p.`planet_metal`,
-                p.`planet_crystal`,
-                p.`planet_deuterium`,
-                u.`onlinetime`,
-                u.`authlevel`,
-                u.`ally_id`,
-                pr.`preference_vacation_mode`,
-                s.`ship_small_cargo_ship`,
-                s.`ship_big_cargo_ship`,
-                s.`ship_light_fighter`,
-                s.`ship_heavy_fighter`,
-                s.`ship_cruiser`,
-                s.`ship_battleship`,
-                s.`ship_espionage_probe`,
-                s.`ship_destroyer`,
-                s.`ship_deathstar`,
-                s.`ship_reaper`,
-                d.`defense_rocket_launcher`,
-                d.`defense_light_laser`,
-                d.`defense_heavy_laser`,
-                d.`defense_ion_cannon`,
-                d.`defense_gauss_cannon`,
-                d.`defense_plasma_turret`,
-                d.`defense_small_shield_dome`,
-                d.`defense_large_shield_dome`,
-                r.`research_weapons_technology`,
-                r.`research_shielding_technology`,
-                r.`research_armour_technology`
+            "SELECT p.`planet_id`, p.`planet_user_id`, p.`planet_galaxy`, p.`planet_system`, p.`planet_planet`,
+                u.`onlinetime`, u.`authlevel`, pr.`preference_vacation_mode`
             FROM `{$prefix}planets` AS p
             INNER JOIN `{$prefix}users` AS u ON u.`id` = p.`planet_user_id`
             LEFT JOIN `{$prefix}preferences` AS pr ON pr.`preference_user_id` = p.`planet_user_id`
-            INNER JOIN `{$prefix}ships` AS s ON s.`ship_planet_id` = p.`planet_id`
-            INNER JOIN `{$prefix}defenses` AS d ON d.`defense_planet_id` = p.`planet_id`
-            INNER JOIN `{$prefix}research` AS r ON r.`research_user_id` = p.`planet_user_id`
             WHERE p.`planet_galaxy` = ?
                 AND p.`planet_system` BETWEEN ? AND ?
                 AND p.`planet_type` = 1
@@ -83,42 +60,25 @@ class TargetScanner
             [$botGalaxy, $systemMin, $systemMax, $botUserId]
         );
 
+        $reports = $this->ownLatestReports($botUserId, $botGalaxy, $systemMin, $systemMax);
+        $reportAge = BotSpeed::seconds(7200); // a report this old (2 h at x5, 10 h at x1) counts half
+
         $targets = [];
         $now = time();
 
         foreach ($rows as $row) {
             $row = (array) $row;
 
-            // Skip admins
-            if ((int) ($row['authlevel'] ?? 0) > 0) {
+            if ((int) ($row['authlevel'] ?? 0) > 0) {          // admin marker
+                continue;
+            }
+            if ((int) ($row['preference_vacation_mode'] ?? 0) > 0) { // vacation marker
+                continue;
+            }
+            if ($this->isNoobProtected($botUserId, (int) $row['planet_user_id'])) { // highscore points
                 continue;
             }
 
-            // Skip vacation mode
-            if ((int) ($row['preference_vacation_mode'] ?? 0) > 0) {
-                continue;
-            }
-
-            // Skip noob protection using real game logic
-            if ($this->isNoobProtected($botUserId, (int) $row['planet_user_id'])) {
-                continue;
-            }
-
-            // Calculate resources
-            $resources = (int) ($row['planet_metal'] ?? 0)
-                + (int) ($row['planet_crystal'] ?? 0)
-                + (int) ($row['planet_deuterium'] ?? 0);
-
-            if ($resources < 1000) {
-                continue;
-            }
-
-            // Calculate defense strength
-            $defenseStrength = $this->calculateDefenseStrength($row);
-            $shipStrength = $this->calculateShipStrength($row);
-            $totalDefense = $defenseStrength + $shipStrength;
-
-            // Calculate distance
             $distance = FleetsLib::targetDistance(
                 $botGalaxy,
                 (int) $row['planet_galaxy'],
@@ -128,16 +88,28 @@ class TargetScanner
                 (int) $row['planet_planet']
             );
 
-            // Score target
-            $resourceScore = $resources / 10000;
-            $defensePenalty = $totalDefense / 5000;
-            $distancePenalty = $distance / 5000;
+            // only what the galaxy view shows: nothing, "i" (7+ days) or "I" (28+ days)
+            $daysAway = ($now - (int) ($row['onlinetime'] ?? $now)) / 86400;
+            $inactivityBonus = $daysAway >= self::LONG_INACTIVE_DAYS ? 10.0 : ($daysAway >= self::INACTIVE_DAYS ? 7.0 : 0.0);
 
-            $lastActive = (int) ($row['onlinetime'] ?? 0);
-            $hoursInactive = ($now - $lastActive) / 3600;
-            $inactivityBonus = min($hoursInactive / 24, 10);
+            $key = "{$row['planet_system']}:{$row['planet_planet']}";
+            $report = $reports[$key] ?? null;
 
-            $score = $resourceScore - $defensePenalty - $distancePenalty + $inactivityBonus;
+            if ($report !== null) {
+                $resources = (int) $report['metal'] + (int) $report['crystal'] + (int) $report['deuterium'];
+                if ($resources < BotSpeed::amount(1000)) {
+                    continue;
+                }
+                $strength = $this->strength($report['fleet'], $report['defense']);
+                $freshness = ($now - (int) $report['scanned_at']) > $reportAge ? 0.5 : 1.0;
+                $score = ($resources / BotSpeed::amount(10000)) * $freshness - $strength / 5000;
+            } else {
+                $resources = 0;
+                $strength = 0;
+                $score = self::UNSCANNED_SCORE;
+            }
+
+            $score += $inactivityBonus - $distance / 5000;
 
             if ($score > 0) {
                 $targets[] = [
@@ -147,11 +119,10 @@ class TargetScanner
                     'system'           => (int) $row['planet_system'],
                     'planet'           => (int) $row['planet_planet'],
                     'resources'        => $resources,
-                    'defense_strength' => $totalDefense,
+                    'defense_strength' => $strength,
                     'distance'         => $distance,
                     'score'            => $score,
-                    'last_active'      => $lastActive,
-                    // Raw data for battle simulation
+                    'last_active'      => 0, // exact online time is not visible to a player
                     'planet_data'      => $row,
                 ];
             }
@@ -160,6 +131,40 @@ class TargetScanner
         usort($targets, fn ($a, $b) => $b['score'] <=> $a['score']);
 
         return $targets;
+    }
+
+    /**
+     * The bot's own newest, unexpired spy report per planet in range: "system:planet" => report.
+     *
+     * @return array<string, array{metal: int, crystal: int, deuterium: int, fleet: array<int, int>, defense: array<int, int>, scanned_at: int}>
+     */
+    private function ownLatestReports(int $botUserId, int $galaxy, int $systemMin, int $systemMax): array
+    {
+        $rows = DB::table('bot_intel')
+            ->where('bot_user_id', $botUserId)
+            ->where('galaxy', $galaxy)
+            ->whereBetween('system', [$systemMin, $systemMax])
+            ->where('expires_at', '>', time())
+            ->orderByDesc('scanned_at')
+            ->get(['system', 'planet', 'metal', 'crystal', 'deuterium', 'fleet_data', 'defense_data', 'scanned_at']);
+
+        $reports = [];
+        foreach ($rows as $row) {
+            $key = "{$row->system}:{$row->planet}";
+            if (isset($reports[$key])) {
+                continue; // newest first
+            }
+            $reports[$key] = [
+                'metal' => (int) $row->metal,
+                'crystal' => (int) $row->crystal,
+                'deuterium' => (int) $row->deuterium,
+                'fleet' => array_map('intval', json_decode((string) $row->fleet_data, true) ?: []),
+                'defense' => array_map('intval', json_decode((string) $row->defense_data, true) ?: []),
+                'scanned_at' => (int) $row->scanned_at,
+            ];
+        }
+
+        return $reports;
     }
 
     private function isNoobProtected(int $attackerId, int $defenderId): bool
@@ -184,59 +189,28 @@ class TargetScanner
         $defenderPoints = (int) ($defenderStats->user_statistic_total_points ?? 0);
 
         $noob = new \Xgp\App\Libraries\NoobsProtectionLib();
-        
+
         return $noob->isWeak($attackerPoints, $defenderPoints) || $noob->isStrong($attackerPoints, $defenderPoints);
     }
 
     /**
-     * @param  array<string, mixed>  $planet
+     * Rough combat strength of what a report showed (unit id => count).
+     *
+     * @param  array<int, int>  $fleet
+     * @param  array<int, int>  $defense
      */
-    private function calculateDefenseStrength(array $planet): int
+    private function strength(array $fleet, array $defense): int
     {
-        $defensePower = [
-            'defense_rocket_launcher'  => 80,
-            'defense_light_laser'      => 100,
-            'defense_heavy_laser'      => 250,
-            'defense_ion_cannon'       => 500,
-            'defense_gauss_cannon'     => 1100,
-            'defense_plasma_turret'    => 3000,
+        $power = [
+            202 => 5, 203 => 5, 204 => 50, 205 => 150, 206 => 400, 207 => 1000, 210 => 0,
+            213 => 2000, 214 => 200000, 215 => 2800,
+            401 => 80, 402 => 100, 403 => 250, 404 => 1100, 405 => 500, 406 => 3000,
+            502 => 2000, 503 => 10000,
         ];
 
         $total = 0;
-
-        foreach ($defensePower as $column => $power) {
-            $total += (int) ($planet[$column] ?? 0) * $power;
-        }
-
-        // Shield domes
-        $total += (int) ($planet['defense_small_shield_dome'] ?? 0) * 2000;
-        $total += (int) ($planet['defense_large_shield_dome'] ?? 0) * 10000;
-
-        return $total;
-    }
-
-    /**
-     * @param  array<string, mixed>  $planet
-     */
-    private function calculateShipStrength(array $planet): int
-    {
-        $shipPower = [
-            'ship_small_cargo_ship'  => 5,
-            'ship_big_cargo_ship'    => 5,
-            'ship_light_fighter'     => 50,
-            'ship_heavy_fighter'     => 150,
-            'ship_cruiser'           => 400,
-            'ship_battleship'        => 1000,
-            'ship_espionage_probe'   => 0,
-            'ship_destroyer'         => 2000,
-            'ship_deathstar'         => 200000,
-            'ship_reaper'            => 2800,
-        ];
-
-        $total = 0;
-
-        foreach ($shipPower as $column => $power) {
-            $total += (int) ($planet[$column] ?? 0) * $power;
+        foreach ($fleet + $defense as $id => $count) {
+            $total += ($power[$id] ?? 0) * $count;
         }
 
         return $total;

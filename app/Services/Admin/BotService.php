@@ -6,6 +6,7 @@ namespace App\Services\Admin;
 
 use App\Models\Planets;
 use App\Models\User;
+use App\Services\Game\Formulas\OfficerService;
 use App\Services\SettingsService;
 use Exception;
 use Illuminate\Support\Facades\DB;
@@ -54,6 +55,30 @@ class BotService
             }
 
             if ($this->createBot($slot['galaxy'], $slot['system'], $slot['position'])) {
+                $created++;
+            }
+        }
+
+        return $created;
+    }
+
+    /**
+     * Create one bot per entry, in that galaxy/system, on a random free slot 1-15 (2026-10-01, the
+     * universe:reset layout: a dense spawn area plus bots spread over the rest of the galaxies).
+     *
+     * @param list<array{0: int, 1: int}> $systems [galaxy, system] per bot
+     *
+     * @return int Number of bots actually created (a full system is skipped).
+     */
+    public function createBotsAt(array $systems): int
+    {
+        $created = 0;
+
+        foreach ($systems as [$galaxy, $system]) {
+            $taken = Planets::where(['planet_galaxy' => $galaxy, 'planet_system' => $system])->pluck('planet_planet')->all();
+            $free = array_values(array_diff(range(1, MAX_PLANET_IN_SYSTEM), $taken));
+
+            if ($free !== [] && $this->createBot($galaxy, $system, $free[array_rand($free)])) {
                 $created++;
             }
         }
@@ -111,15 +136,28 @@ class BotService
                 ]);
 
                 $bot->preferences()->create();
+                // bots get every officer for ever, like players (2026-10-01)
                 $bot->premium()->create([
                     'premium_dark_matter' => $this->settings->getInt('registration_dark_matter'),
+                    'premium_officier_commander' => OfficerService::PERMANENT,
+                    'premium_officier_admiral' => OfficerService::PERMANENT,
+                    'premium_officier_engineer' => OfficerService::PERMANENT,
+                    'premium_officier_geologist' => OfficerService::PERMANENT,
+                    'premium_officier_technocrat' => OfficerService::PERMANENT,
                 ]);
                 $bot->research()->create();
                 $bot->stats()->create();
 
                 (new PlanetLib())->setNewPlanet($galaxy, $system, $position, $bot->id, '', true);
 
-                $planetId = (int) DB::getPdo()->lastInsertId();
+                // look the planet up: lastInsertId() is the SHIPS row (setNewPlanet inserts planet,
+                // buildings, defenses, ships), which only matched while those ids happened to line up
+                $planetId = (int) Planets::where([
+                    'planet_galaxy' => $galaxy,
+                    'planet_system' => $system,
+                    'planet_planet' => $position,
+                    'planet_type' => 1,
+                ])->value('planet_id');
 
                 User::where('id', $bot->id)->update([
                     'home_planet_id' => $planetId,

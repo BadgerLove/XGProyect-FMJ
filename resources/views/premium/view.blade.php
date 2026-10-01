@@ -55,6 +55,9 @@
             </div>
         </td>
         <td class="l" style="width:90px;text-align:center; vertical-align:middle;">
+            @if ($item['permanent'] ?? false)
+            <strong style="color:lime">{{ __('game/officier.of_permanent') }}</strong>
+            @else
             <a href='{{ $item['link_week'] }}' >
                 <strong>
                         {{ __('game/officier.of_week') }}<br>
@@ -62,10 +65,14 @@
                         <br>{{ __('game/global.darkmatter') }}
                 </strong>
             </a>
+            @endif
         </td>
     </tr>
     <tr>
         <td class="l" style="width:90px;text-align:center; vertical-align:middle;">
+            @if ($item['permanent'] ?? false)
+            &nbsp;
+            @else
             <a href='{{ $item['link_month'] }}'>
                 <strong>
                     {{ __('game/officier.of_months') }}<br>
@@ -73,6 +80,7 @@
                     <br>{{ __('game/global.darkmatter') }}
                 </strong>
             </a>
+            @endif
         </td>
     </tr>
     <tr>
