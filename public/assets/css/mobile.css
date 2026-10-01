@@ -1696,3 +1696,37 @@
         letter-spacing: -0.2px;
     }
 }
+
+/* ============================================
+   FRONT PAGE ERROR BUBBLES on phones (2026-10-01)
+   The validation script places them to the RIGHT of the field (desktop room), so on a phone
+   "Unrecognised email..." / "Your login page had expired" sat off the left/right edge.
+   Phones: show them as a fixed message across the bottom of the screen instead (the bubble
+   lives inside a wrapper, so a plain left/top would still be measured from the wrong box).
+   ============================================ */
+@media (max-width: 768px) {
+    .formError {
+        position: fixed !important;
+        left: 8px !important;
+        right: 8px !important;
+        top: auto !important;
+        bottom: 16px;
+        margin: 0 !important;
+        padding: 0 !important;
+        opacity: 1 !important;
+    }
+
+    .formError .formErrorContent {
+        font-size: 13px;
+    }
+
+    .formError .formErrorContent {
+        width: auto !important;
+        max-width: calc(100vw - 16px);
+        box-sizing: border-box;
+    }
+
+    .formError .formErrorArrow {
+        display: none;
+    }
+}

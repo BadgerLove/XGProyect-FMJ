@@ -104,7 +104,11 @@ class UpdatesLibrary
                 )
             );
             DB::statement($this->prepareSql('DELETE FROM ' . REPORTS . " WHERE `report_time` < '" . $delBefore . "';"));
-            DB::table('sessions')->where('last_activity', '<', $delPlanets)->delete();
+            // Visitors' sessions go after a day; logged-in players keep theirs for SESSION_LIFETIME.
+            // This used to delete EVERY session idle for a day, so the 30-day login (.env) really
+            // lasted 24 h, and a front page left open then answered "419 Page Expired" (2026-10-01).
+            DB::table('sessions')->whereNull('user_id')->where('last_activity', '<', $delPlanets)->delete();
+            DB::table('sessions')->where('last_activity', '<', time() - (int) config('session.lifetime') * 60)->delete();
             // fleets still heading for a planet about to be purged must turn around first
             MissionControlLib::recallFleetsTargetingDestroyedPlanets($delPlanets);
             DB::statement(

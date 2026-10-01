@@ -98,7 +98,7 @@ input#loginSubmit {
 
 select#serverLogin,
 select#server {
-	background:#8d9aa7 url("../../images/input-bg.gif") repeat-x scroll 0 0;
+	background:#8d9aa7 url("../../images/home/input-bg.gif") repeat-x scroll 0 0;
 	border:2px solid #9EB4CB;
 	color:#30576F;
 	cursor:pointer;

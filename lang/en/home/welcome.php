@@ -22,6 +22,7 @@ return [
     'hm_username_loading' => 'Please wait, loading...',
     'hm_only_characters' => 'Use characters only.',
     'hm_invalid_login' => 'Unrecognised email address or invalid password. Please try again or click on \'Forgotten your Password\'.',
+    'hm_login_expired' => 'Your login page had expired. Please log in again.',
     'hm_hidden_title' => 'XGProyect - Conquer the universe',
     'hm_login_button' => 'Login',
     'hm_close_button' => 'Close',

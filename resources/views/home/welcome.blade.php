@@ -18,7 +18,7 @@
     <link rel="stylesheet" type="text/css" href="{{ asset('assets/css/home/reset.css') }}">
     <link rel="stylesheet" type="text/css" href="{{ asset('assets/css/home/forms.css') }}">
     <link rel="stylesheet" type="text/css" href="{{ asset('assets/css/home/all.css') }}">
-    <link rel="stylesheet" type="text/css" href="{{ asset('assets/css/mobile.css') }}">
+    <link rel="stylesheet" type="text/css" href="{{ asset('assets/css/mobile.css') }}?v=7">
     <script type="text/javascript" src="{{ asset('assets/js/home/jquery.tools.min.js') }}"></script>
     <style type="text/css"></style>
     <script type="text/javascript" src="{{ asset('assets/js/home/jquery.easing-1.3.pack.js') }}"></script>
@@ -159,7 +159,7 @@
 		            <div class="input-wrap">
 						<label for="usernameLogin">{{ __('home/welcome.hm_username_mail') }}</label>
 						<div class="black-border">
-                            <input class="js_userName" type="text" onkeydown="hideLoginErrorBox();" id="usernameLogin" name="username" value="">
+                            <input class="js_userName" type="text" onkeydown="hideLoginErrorBox();" id="usernameLogin" name="username" value="{{ old('username') }}">
 						</div>
 					</div>
 					<div class="input-wrap">
@@ -196,7 +196,7 @@
                                         <td id="uni_select_box" class="select" style="height:19px;overflow:hidden;">
                                             <span id="uni_name" class="">{{ __('home/welcome.hm_universe_name') }}</span>
                                         </td>
-                                        <td style="width:18px; background: url('{img_path}dropdownmenu_arrow.png') no-repeat scroll 0 0 #8D9AA7;"></td>
+                                        <td style="width:18px; background: url('{{ asset('assets/images/home/dropdownmenu_arrow.png') }}') no-repeat scroll 0 0 #8D9AA7;"></td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -268,7 +268,9 @@
                         <li><a id="tab2" href="home/ajax/info">{{ __('home/welcome.hm_about') }}</a></li>
                         <li><a id="tab3" href="home/ajax/media">{{ __('home/welcome.hm_media') }}</a></li>
 					</ul>
+                    @if ($forumUrl)
                     <a id="tab4" href="{{ $forumUrl }}" target="_blank">{{ __('home/welcome.hm_forum') }}</a>
+                    @endif
                     <br class="clearfloat">
 				</div>
 				<div id="tabContent">

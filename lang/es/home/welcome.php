@@ -22,6 +22,7 @@ return [
     'hm_username_loading' => 'Cargando... Por favor, espera',
     'hm_only_characters' => 'Utilizar s\u00f3lo caracteres.',
     'hm_invalid_login' => 'Dirección de correo electrónico desconocida o contraseña errónea. Inténtalo de nuevo o haz clic en "Contraseña olvidada".',
+    'hm_login_expired' => 'La página de acceso había caducado. Por favor, inicia sesión de nuevo.',
     'hm_hidden_title' => 'XGProyect - Conquista el universo',
     'hm_login_button' => 'Entrar',
     'hm_close_button' => 'Cerrar',
