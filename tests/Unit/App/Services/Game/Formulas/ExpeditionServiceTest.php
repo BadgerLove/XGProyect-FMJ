@@ -157,16 +157,16 @@ class ExpeditionServiceTest extends TestCase
         $expedition = $this->expeditionService();
 
         $resultSmall = $expedition->getDarkMatterSourceSize('small');
-        $this->assertGreaterThanOrEqual(300, $resultSmall);
-        $this->assertLessThanOrEqual(400, $resultSmall);
+        $this->assertGreaterThanOrEqual(6000, $resultSmall);
+        $this->assertLessThanOrEqual(10000, $resultSmall);
 
         $resultMedium = $expedition->getDarkMatterSourceSize('medium');
-        $this->assertGreaterThanOrEqual(500, $resultMedium);
-        $this->assertLessThanOrEqual(700, $resultMedium);
+        $this->assertGreaterThanOrEqual(16000, $resultMedium);
+        $this->assertLessThanOrEqual(30000, $resultMedium);
 
         $resultLarge = $expedition->getDarkMatterSourceSize('large');
-        $this->assertGreaterThanOrEqual(1000, $resultLarge);
-        $this->assertLessThanOrEqual(1800, $resultLarge);
+        $this->assertGreaterThanOrEqual(40000, $resultLarge);
+        $this->assertLessThanOrEqual(100000, $resultLarge);
     }
 
     public function testCalculateResourceTypeObtained(): void
