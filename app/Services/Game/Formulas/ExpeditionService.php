@@ -79,14 +79,15 @@ class ExpeditionService
     public function getDarkMatterSourceSize(string $discoveryType): int
     {
         if ($discoveryType === 'medium') {
-            return mt_rand(80000, 150000);
+            return mt_rand(500, 700);
         }
 
         if ($discoveryType === 'large') {
-            return mt_rand(200000, 500000);
+            return mt_rand(1000, 1800);
         }
 
-        return mt_rand(30000, 50000); // $discoveryType === 'small'
+        // stock OGame sizes, back from the x5-era 30k-500k on 3 Oct 2026 (x1 universe)
+        return mt_rand(300, 400); // $discoveryType === 'small'
     }
 
     public function calculateResourceTypeObtained(): string
