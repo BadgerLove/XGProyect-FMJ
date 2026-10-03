@@ -181,7 +181,9 @@ class FormulasService
     {
         $universeSpeed = $this->settingsService->getInt('game_speed') / 2500;
 
-        return ($metalCost + $crystalCost) / ($universeSpeed * 1000 * (1 + $totalLabLevel) * (1 + $expeditionLevel)) * 3600;
+        // OGame: (metal + crystal) / (1000 * (1 + lab levels)) hours. Astrophysics ($expeditionLevel) does not
+        // speed up research; the old (1 + astrophysics) divisor was removed on 3 Oct 2026.
+        return ($metalCost + $crystalCost) / ($universeSpeed * 1000 * (1 + $totalLabLevel)) * 3600;
     }
 
     public function getTearDownTime(int $metalCost, int $crystalCost, int $building, int $roboticsFactory, int $naniteFactory, int $level): float

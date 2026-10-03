@@ -11,7 +11,8 @@ class ProductionService
 {
     public function maxStorable(int $storageLevel): int
     {
-        return (int) (2.5 * pow(M_E, (20 * $storageLevel / 33)) * 5000);
+        // OGame: 5000 * floor(2.5 * e^(20 * level / 33)) -> 10,000 at level 0 (the floor was missing until 3 Oct 2026)
+        return 5000 * (int) floor(2.5 * exp(20 * $storageLevel / 33));
     }
 
     public function maxProductionPercentage(int $maxEnergy, int $energyUsed): int

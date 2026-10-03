@@ -252,7 +252,8 @@ abstract class Formulas
     {
         $universe_speed = app(SettingsService::class)->getInt('game_speed') / 2500;
 
-        return ($metal_cost + $cystal_cost) / ($universe_speed * 1000 * (1 + $total_lab_level) * (1 + $expedition_level)) * 3600;
+        // Astrophysics ($expedition_level) does not speed up research (divisor removed 3 Oct 2026)
+        return ($metal_cost + $cystal_cost) / ($universe_speed * 1000 * (1 + $total_lab_level)) * 3600;
     }
 
     /**
