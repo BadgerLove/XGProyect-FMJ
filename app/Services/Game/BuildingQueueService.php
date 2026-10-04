@@ -256,8 +256,10 @@ class BuildingQueueService
                 break;
             }
 
+            // the next item starts when this one finished (not now), so queues keep running while the player is away
+            $finishedAt = (int) $first->end_time;
             $this->applyCompletion($planet, $first);
-            $this->advanceQueue($planet, $user);
+            $this->advanceQueue($planet, $user, $finishedAt);
         }
     }
 
@@ -305,7 +307,7 @@ class BuildingQueueService
     /**
      * @param  array<string,mixed>  $user
      */
-    private function advanceQueue(Planets $planet, array $user): void
+    private function advanceQueue(Planets $planet, array $user, int $startTime): void
     {
         while (true) {
             $first = $planet->buildingQueue()->where('position', 1)->first();
@@ -348,7 +350,7 @@ class BuildingQueueService
                 $planet->planet_metal -= $price['metal'] ?? 0;
                 $planet->planet_crystal -= $price['crystal'] ?? 0;
                 $planet->planet_deuterium -= $price['deuterium'] ?? 0;
-                $planet->planet_b_building = $first->end_time;
+                $planet->planet_b_building = $this->retimeQueue($planet, $startTime);
                 $planet->save();
                 break;
             }
@@ -357,6 +359,38 @@ class BuildingQueueService
             $first->delete();
             $this->shiftPositionsDown($planet, 1);
         }
+    }
+
+    /**
+     * Work the queue's times out again from the planet's CURRENT Robotics/Nanite levels, starting at $startTime.
+     * Times were fixed when each item was queued, so a building queued behind a Robotics Factory kept its slow
+     * time, and items behind one dropped for lack of resources still waited out its time (Dale, 4 Oct 2026).
+     *
+     * @return int end time of the first item
+     */
+    private function retimeQueue(Planets $planet, int $startTime): int
+    {
+        $roboticsCol = $this->registry->get(BuildingsEnumerator::BUILDING_ROBOT_FACTORY)->getName();
+        $naniteCol = $this->registry->get(BuildingsEnumerator::BUILDING_NANO_FACTORY)->getName();
+        $robotics = (int) ($planet->buildings?->$roboticsCol ?? 0);
+        $nanite = (int) ($planet->buildings?->$naniteCol ?? 0);
+        $runningTime = $startTime;
+        $firstEnd = $startTime;
+
+        foreach ($planet->buildingQueue()->orderBy('position')->get() as $item) {
+            $item->duration = $item->mode === 'build'
+                ? $this->developmentsService->developmentTime($item->building_id, $item->target_level - 1, $robotics, $nanite, 0, 0, false)
+                : (int) $this->developmentsService->tearDownTime($item->building_id, $item->target_level + 1, $robotics, $nanite);
+            $runningTime += $item->duration;
+            $item->end_time = $runningTime;
+            $item->save();
+
+            if ($item->position === 1) {
+                $firstEnd = $runningTime;
+            }
+        }
+
+        return $firstEnd;
     }
 
     private function shiftPositionsDown(Planets $planet, int $deletedPosition): void
