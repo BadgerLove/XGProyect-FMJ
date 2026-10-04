@@ -30,6 +30,17 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        //
+        // The game's clock = the admin "date_time_zone" setting (Europe/London). Only legacy game.php pages
+        // applied it (Common::setSystemTimezone); pages moved to Laravel controllers (supplies, facilities,
+        // research, overview...) showed UTC, an hour behind in summer (4 Oct 2026). Unix times are unaffected.
+        try {
+            $zone = $this->app->make(SettingsService::class)->getString('date_time_zone');
+            if (in_array($zone, timezone_identifiers_list(), true)) {
+                date_default_timezone_set($zone);
+                config(['app.timezone' => $zone]);
+            }
+        } catch (\Throwable) {
+            // no database yet (install, package discovery): keep config/app.php's zone
+        }
     }
 }

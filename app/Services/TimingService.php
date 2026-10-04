@@ -49,7 +49,8 @@ class TimingService
             return '00:00';
         }
 
-        return date('H:i', $remaining);
+        // a duration, not a clock time: gmdate, or it gains the server's UTC offset (4 Oct 2026)
+        return gmdate('H:i', $remaining);
     }
 
     public function getOnlineStatus(int $onlineTime, int $currentTime): string

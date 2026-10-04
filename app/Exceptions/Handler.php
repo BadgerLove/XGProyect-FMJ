@@ -26,7 +26,8 @@ class Handler extends ExceptionHandler
      * @var array<int, class-string<\Throwable>>
      */
     protected $dontReport = [
-        //
+        // not an error: legacy pages throw it to show a message page ("You need to build a research lab"...)
+        LegacyView::class,
     ];
 
     /**
