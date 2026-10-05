@@ -53,3 +53,8 @@ xgproyect
 # Compiled views
 storage/framework/views/*.php
 !storage/framework/views/.gitignore
+
+# local working folders and runtime state (Wendy, 2026-10-05)
+_proposed/
+php-workers.log
+bots-paused-until*.txt
