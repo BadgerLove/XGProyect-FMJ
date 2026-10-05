@@ -91,7 +91,8 @@ class Gauss
             }
             $i++;
             if ($i > 10) {
-                return mt_rand(intval($min), intval($max));
+                // uniform between the bounds; intval() here rounded e.g. 0.8..1.2 down to 0..1 and dragged the mean low (5 Oct 2026)
+                return $min + ($max - $min) * mt_rand() / mt_getrandmax();
             }
         }
     }

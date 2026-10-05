@@ -4,89 +4,58 @@ declare(strict_types=1);
 
 namespace App\Services\Bot;
 
+use App\Core\GameObjects\Defense as DefenseObject;
+use App\Core\GameObjects\GameObjectRegistry;
+use App\Core\GameObjects\Ship as ShipObject;
+use App\Services\Game\Formulas\FleetsService;
 use Xgp\App\Libraries\BattleEngine\Core\Battle;
+use Xgp\App\Libraries\BattleEngine\Models\Defense;
 use Xgp\App\Libraries\BattleEngine\Models\Fleet;
 use Xgp\App\Libraries\BattleEngine\Models\Player;
 use Xgp\App\Libraries\BattleEngine\Models\PlayerGroup;
-use Xgp\App\Libraries\BattleEngine\Models\Defense;
 use Xgp\App\Libraries\BattleEngine\Models\Ship;
 use Xgp\App\Libraries\BattleEngine\Models\ShipType;
 
 /**
- * Wraps the OPBE battle engine for bot decision-making.
+ * Wraps the OPBE battle engine for the Battle Simulator page and the bots' attack decisions.
  *
- * Simulates battles without affecting the real game to determine
- * if an attack is likely to succeed before committing ships.
+ * Every unit is built from the game's own GameObjectRegistry, exactly as Missions\Attack builds it for a
+ * real fight: shield, attack and rapid fire from the registry, hull = (metal + crystal) / 10. Until 5 Oct 2026
+ * this class carried private copies of those tables, which had drifted: deuterium was counted into hull
+ * (plasma turret 13,000 instead of 10,000, bomber +20 %), and the rapid fire table was years out of date.
  */
 class BattleSimulator
 {
-    /**
-     * Ship combat stats: [id => [shield, power, cost]]
-     * Cost is used for hull calculation: hull = COST_TO_ARMOUR * sum(cost)
-     */
-    private const SHIP_STATS = [
-        202 => ['shield' => 10,    'power' => 5,     'cost' => [2000, 2000, 0],   'storage' => 5000],
-        203 => ['shield' => 25,    'power' => 5,     'cost' => [6000, 6000, 0],   'storage' => 25000],
-        204 => ['shield' => 10,    'power' => 50,    'cost' => [3000, 1000, 0],   'storage' => 50],
-        205 => ['shield' => 25,    'power' => 150,   'cost' => [6000, 4000, 0],   'storage' => 100],
-        206 => ['shield' => 50,    'power' => 400,   'cost' => [20000, 7000, 2000], 'storage' => 800],
-        207 => ['shield' => 200,   'power' => 1000,  'cost' => [45000, 15000, 0], 'storage' => 1500],
-        208 => ['shield' => 100,   'power' => 50,    'cost' => [10000, 20000, 10000], 'storage' => 7500],
-        209 => ['shield' => 10,    'power' => 1,     'cost' => [10000, 6000, 2000], 'storage' => 20000],
-        210 => ['shield' => 0.01,  'power' => 0.01,  'cost' => [0, 1000, 0],      'storage' => 5],
-        211 => ['shield' => 500,   'power' => 1000,  'cost' => [50000, 25000, 15000], 'storage' => 500],
-        212 => ['shield' => 1,     'power' => 1,     'cost' => [0, 2000, 500],     'storage' => 0],
-        213 => ['shield' => 500,   'power' => 2000,  'cost' => [60000, 50000, 15000], 'storage' => 2000],
-        214 => ['shield' => 50000, 'power' => 200000, 'cost' => [5000000, 4000000, 1000000], 'storage' => 1000000],
-        215 => ['shield' => 700,   'power' => 2800,  'cost' => [85000, 55000, 20000], 'storage' => 10000],
-    ];
+    /** Units that take part in a fight, as in Missions\Attack (missiles 502/503 do not). */
+    private const SHIP_MIN_ID = 202;
+    private const SHIP_MAX_ID = 215;
+    private const DEFENSE_MIN_ID = 401;
+    private const DEFENSE_MAX_ID = 408;
 
-    /**
-     * Defense combat stats: [id => [shield, power, cost]]
-     */
-    private const DEFENSE_STATS = [
-        401 => ['shield' => 20,    'power' => 80,    'cost' => [2000, 0, 0]],
-        402 => ['shield' => 25,    'power' => 100,   'cost' => [1500, 500, 0]],
-        403 => ['shield' => 100,   'power' => 250,   'cost' => [6000, 2000, 0]],
-        404 => ['shield' => 200,   'power' => 1100,  'cost' => [20000, 15000, 2000]],
-        405 => ['shield' => 500,   'power' => 150,   'cost' => [2000, 6000, 0]],
-        406 => ['shield' => 300,   'power' => 3000,  'cost' => [50000, 50000, 30000]],
-        502 => ['shield' => 2000,  'power' => 1,     'cost' => [10000, 10000, 0]],
-        503 => ['shield' => 10000, 'power' => 1,     'cost' => [50000, 50000, 0]],
-    ];
-
-    /**
-     * Rapid fire values: [attacker_id => [defender_id => rapid_fire]]
-     */
-    private const RAPID_FIRE = [
-        202 => [210 => 5, 212 => 5],
-        203 => [210 => 5, 212 => 5],
-        204 => [210 => 5, 212 => 5],
-        205 => [202 => 3, 210 => 5, 212 => 5],
-        206 => [204 => 6, 210 => 5, 212 => 5, 401 => 10],
-        207 => [210 => 5, 212 => 5],
-        208 => [210 => 5, 212 => 5],
-        209 => [210 => 5, 212 => 5],
-        211 => [210 => 5, 212 => 5, 401 => 20, 402 => 20, 403 => 10, 404 => 5, 405 => 10, 406 => 5],
-        213 => [210 => 5, 212 => 5],
-        214 => [202 => 250, 203 => 250, 204 => 200, 205 => 100, 206 => 33, 207 => 30, 208 => 250, 209 => 250, 210 => 1250, 211 => 25, 212 => 1250, 213 => 5, 215 => 10],
-        215 => [210 => 5, 212 => 5, 204 => 3, 205 => 3],
-    ];
+    public function __construct(
+        private readonly GameObjectRegistry $registry,
+        private readonly FleetsService $fleetsService,
+    ) {
+    }
 
     /**
      * Simulate a battle between an attacker fleet and a defender planet.
      *
      * @param  array<int, int>  $attackerShips  Ship ID => count
-     * @param  array<string, mixed>  $defenderPlanet  Defender's planet (flat array with ships + defenses)
+     * @param  array<string, mixed>  $defenderPlanet  Defender's planet (flat array with ships + defenses + resources)
      * @param  array<string, mixed>  $attackerUser  Attacker's user (for tech levels)
      * @param  array<string, mixed>  $defenderUser  Defender's user (for tech levels)
      *
-     * @return array{winner: string, attacker_losses: int, defender_losses: int, attacker_ships_remaining: int, defender_ships_remaining: int, loot_metal: int, loot_crystal: int, loot_deuterium: int}
+     * @return array<string, mixed>
      */
     public function simulate(array $attackerShips, array $defenderPlanet, array $attackerUser, array $defenderUser): array
     {
-        // Build attacker fleet
-        $attackerFleet = $this->buildFleet(1, $attackerShips);
+        $attackerShips = $this->combatUnits($attackerShips, self::SHIP_MIN_ID, self::SHIP_MAX_ID);
+
+        $attackerFleet = new Fleet(1);
+        foreach ($attackerShips as $shipId => $count) {
+            $attackerFleet->addShipType($this->makeUnit($shipId, $count));
+        }
         $attackerPlayer = new Player(
             id: 1,
             fleets: [$attackerFleet],
@@ -95,31 +64,13 @@ class BattleSimulator
             armour_tech: (int) ($attackerUser['research_armour_technology'] ?? 0),
         );
 
-        // Build defender fleet (ships on planet)
+        // Defender: ships on the planet and its defences fight as one home fleet, as in a real attack
         $defenderShips = $this->extractDefenderShips($defenderPlanet);
-        $defenderFleet = $this->buildFleet(2, $defenderShips);
-
-        // Add defenses to defender fleet
         $defenderDefenses = $this->extractDefenderDefenses($defenderPlanet);
-
-        foreach ($defenderDefenses as $defenseId => $count) {
-            if ($count > 0) {
-                $stats = self::DEFENSE_STATS[$defenseId] ?? null;
-
-                if ($stats) {
-                    $shipType = new Defense(
-                        id: $defenseId,
-                        count: $count,
-                        rf: [],
-                        shield: $stats['shield'],
-                        cost: $stats['cost'],
-                        power: $stats['power'],
-                    );
-                    $defenderFleet->addShipType($shipType);
-                }
-            }
+        $defenderFleet = new Fleet(2);
+        foreach ($defenderShips + $defenderDefenses as $unitId => $count) {
+            $defenderFleet->addShipType($this->makeUnit($unitId, $count));
         }
-
         $defenderPlayer = new Player(
             id: 2,
             fleets: [$defenderFleet],
@@ -128,21 +79,13 @@ class BattleSimulator
             armour_tech: (int) ($defenderUser['research_armour_technology'] ?? 0),
         );
 
-        // Run simulation
-        $attackers = new PlayerGroup([$attackerPlayer]);
-        $defenders = new PlayerGroup([$defenderPlayer]);
-
-        $battle = new Battle($attackers, $defenders);
-        ob_start();
+        $battle = new Battle(new PlayerGroup([$attackerPlayer]), new PlayerGroup([$defenderPlayer]));
         $battle->startBattle();
-        ob_end_clean();
-
         $report = $battle->getReport();
 
-        // Winner straight from the engine (attackerHasWin / isAdraw — same calls CombatLogService
-        // uses for the real battle). Until 6 Sep this subtracted getTotalAttackersLostUnits() —
-        // which is the RESOURCE VALUE of the lost ships, not a count — from the ship count, so any
-        // fight with real losses read as "draw" and only zero-loss raids were ever approved.
+        // Winner straight from the engine (attackerHasWin / isAdraw: the same calls CombatLogService uses
+        // for the real battle). Until 6 Sep 2026 this subtracted getTotalAttackersLostUnits(), which is the
+        // RESOURCE VALUE of the lost ships, not a count, so any fight with real losses read as "draw".
         if ($report->attackerHasWin()) {
             $winner = 'attacker';
         } elseif ($report->isAdraw()) {
@@ -151,74 +94,159 @@ class BattleSimulator
             $winner = 'defender';
         }
 
-        // Unit counts before/after (defences counted before repair)
+        $attackerFinal = $this->extractFleetComposition($report->getAfterBattleAttackers());
+        $defenderFinalAll = $this->extractFleetComposition($report->getAfterBattleDefenders());
+
         $attackerInitialCount = array_sum($attackerShips);
         $defenderInitialCount = array_sum($defenderShips) + array_sum($defenderDefenses);
-
-        $attackerFinal = $this->extractFleetComposition($report->getAfterBattleAttackers());
-        $defenderFinal_all = $this->extractFleetComposition($report->getAfterBattleDefenders());
-
         $attackerRemaining = array_sum($attackerFinal);
-        $defenderRemaining = array_sum($defenderFinal_all);
-        $attackerLost = max(0, $attackerInitialCount - $attackerRemaining);
-        $defenderLost = max(0, $defenderInitialCount - $defenderRemaining);
+        $defenderRemaining = array_sum($defenderFinalAll);
 
-        // Loot from report
-        $steal = $report->getSteal();
-        $lootMetal = (int) ($steal['metal'] ?? 0);
-        $lootCrystal = (int) ($steal['crystal'] ?? 0);
-        $lootDeuterium = (int) ($steal['deuterium'] ?? 0);
-
-        // Debris field
-        $debris = $report->getDebris();
-        $moonProb = $report->getMoonProb();
-
-        // Per-ship-type breakdown: initial counts + surviving counts (extracted above)
-        $attackerInitial = $attackerShips;
-
-        // Defender has both ships and defenses — separate them
+        // Defender has both ships and defenses: separate them (defences counted after the 70 % repair)
         $defenderShipsFinal = [];
         $defenderDefensesFinal = [];
-
-        foreach ($defenderFinal_all as $id => $count) {
-            if ($id >= 400) {
+        foreach ($defenderFinalAll as $id => $count) {
+            if ($id >= self::DEFENSE_MIN_ID) {
                 $defenderDefensesFinal[$id] = $count;
             } else {
                 $defenderShipsFinal[$id] = $count;
             }
         }
 
-        // Build detail arrays with initial → final
-        $attackerDetail = $this->buildDetail($attackerInitial, $attackerFinal);
-        $defenderShipsDetail = $this->buildDetail($defenderShips, $defenderShipsFinal);
-        $defenderDefensesDetail = $this->buildDetail($defenderDefenses, $defenderDefensesFinal);
-
-        // Compute per-type lost units for costs
-        $attackerLostUnitsDetail = $report->getAttackersLostUnits();
-        $defenderLostUnitsDetail = $report->getDefendersLostUnits();
-
-        // Flatten lost units to [shipId => [metal, crystal]]
-        $attackerCostsByType = $this->flattenLostUnits($attackerLostUnitsDetail);
-        $defenderCostsByType = $this->flattenLostUnits($defenderLostUnitsDetail);
+        $debris = $report->getDebris();
+        $loot = $winner === 'attacker'
+            ? $this->estimateLoot($attackerFinal, (int) ($attackerUser['research_hyperspace_technology'] ?? 0), $defenderPlanet)
+            : ['metal' => 0, 'crystal' => 0, 'deuterium' => 0];
 
         return [
             'winner'                    => $winner,
-            'attacker_losses'           => $attackerLost,
-            'defender_losses'           => $defenderLost,
+            'attacker_losses'           => max(0, $attackerInitialCount - $attackerRemaining),
+            'defender_losses'           => max(0, $defenderInitialCount - $defenderRemaining),
             'attacker_ships_remaining'  => $attackerRemaining,
             'defender_ships_remaining'  => $defenderRemaining,
-            'attacker_ships_detail'     => $attackerDetail,
-            'defender_ships_detail'     => $defenderShipsDetail,
-            'defender_defenses_detail'  => $defenderDefensesDetail,
-            'attacker_lost_costs'       => $attackerCostsByType,
-            'defender_lost_costs'       => $defenderCostsByType,
-            'loot_metal'                => $lootMetal,
-            'loot_crystal'              => $lootCrystal,
-            'loot_deuterium'            => $lootDeuterium,
+            'attacker_ships_detail'     => $this->buildDetail($attackerShips, $attackerFinal),
+            'defender_ships_detail'     => $this->buildDetail($defenderShips, $defenderShipsFinal),
+            'defender_defenses_detail'  => $this->buildDetail($defenderDefenses, $defenderDefensesFinal),
+            'attacker_lost_costs'       => $this->flattenLostUnits($report->getAttackersLostUnits()),
+            'defender_lost_costs'       => $this->flattenLostUnits($report->getDefendersLostUnits()),
+            'loot_metal'                => $loot['metal'],
+            'loot_crystal'              => $loot['crystal'],
+            'loot_deuterium'            => $loot['deuterium'],
             'debris_metal'              => (int) ($debris[0] ?? 0),
             'debris_crystal'            => (int) ($debris[1] ?? 0),
-            'moon_chance'               => $moonProb,
+            'moon_chance'               => $report->getMoonProb(),
             'rounds'                    => $report->getLastRoundNumber(),
+        ];
+    }
+
+    /**
+     * Quick check: would the attacker likely win? Compares raw attack totals, no simulation.
+     *
+     * @param  array<int, int>  $attackerShips
+     * @param  array<string, mixed>  $defenderPlanet
+     */
+    public function quickWinCheck(array $attackerShips, array $defenderPlanet): bool
+    {
+        $attackerPower = $this->calculateTotalPower($this->combatUnits($attackerShips, self::SHIP_MIN_ID, self::SHIP_MAX_ID));
+        $defenderPower = $this->calculateTotalPower($this->extractDefenderShips($defenderPlanet))
+            + $this->calculateTotalPower($this->extractDefenderDefenses($defenderPlanet));
+
+        // Need 1.5x power to be confident
+        return $attackerPower > ($defenderPower * 1.5);
+    }
+
+    /**
+     * One engine unit built the way Missions\Attack::getShipType builds it for a real fight.
+     */
+    private function makeUnit(int $id, int $count): ShipType
+    {
+        $object = $this->registry->get($id);
+        $price = $object->getPrice();
+        $cost = [$price->getMetal(), $price->getCrystal()];   // hull = COST_TO_ARMOUR * (metal + crystal), never deuterium
+
+        if ($object instanceof ShipObject) {
+            return new Ship($id, $count, $object->getRapidFire()->toArray(), $object->getShield(), $cost, $object->getAttack());
+        }
+
+        if ($object instanceof DefenseObject) {
+            return new Defense($id, $count, $object->getRapidFire()->toArray(), $object->getShield(), $cost, $object->getAttack());
+        }
+
+        throw new \InvalidArgumentException("Game object {$id} is not a ship or a defence");
+    }
+
+    /**
+     * Keep only real fighting units with a positive count.
+     *
+     * @param  array<int, int>  $units
+     * @return array<int, int>
+     */
+    private function combatUnits(array $units, int $minId, int $maxId): array
+    {
+        $kept = [];
+
+        foreach ($units as $id => $count) {
+            $id = (int) $id;
+            $count = (int) $count;
+
+            if ($count > 0 && $id >= $minId && $id <= $maxId && $this->registry->has($id)) {
+                $kept[$id] = $count;
+            }
+        }
+
+        return $kept;
+    }
+
+    /**
+     * What the surviving attackers carry home if they win: 50 % of each resource, loaded in the game's
+     * order (metal to a third of the hold, crystal to half the rest, deuterium, then metal and crystal
+     * again), capped by cargo capacity with the attacker's Hyperspace Technology. Same rule as
+     * Missions\Attack::plunder.
+     *
+     * @param  array<int, int>  $survivors  Ship ID => count after the battle
+     * @param  array<string, mixed>  $defenderPlanet
+     * @return array{metal: int, crystal: int, deuterium: int}
+     */
+    private function estimateLoot(array $survivors, int $hyperspace, array $defenderPlanet): array
+    {
+        $capacity = 0;
+        foreach ($survivors as $shipId => $count) {
+            $object = $this->registry->get((int) $shipId);
+            if ($object instanceof ShipObject) {
+                $capacity += $count * $this->fleetsService->getMaxStorage($object->getCapacity(), $hyperspace);
+            }
+        }
+
+        $metal = max(0, (float) ($defenderPlanet['planet_metal'] ?? 0)) / 2;
+        $crystal = max(0, (float) ($defenderPlanet['planet_crystal'] ?? 0)) / 2;
+        $deuterium = max(0, (float) ($defenderPlanet['planet_deuterium'] ?? 0)) / 2;
+        $steal = ['metal' => 0.0, 'crystal' => 0.0, 'deuterium' => 0.0];
+
+        $stolen = min($capacity / 3, $metal);
+        $steal['metal'] += $stolen;
+        $metal -= $stolen;
+        $capacity -= $stolen;
+
+        $stolen = min($capacity / 2, $crystal);
+        $steal['crystal'] += $stolen;
+        $crystal -= $stolen;
+        $capacity -= $stolen;
+
+        $stolen = min($capacity, $deuterium);
+        $steal['deuterium'] += $stolen;
+        $capacity -= $stolen;
+
+        $stolen = min($capacity / 2, $metal);
+        $steal['metal'] += $stolen;
+        $capacity -= $stolen;
+
+        $stolen = min($capacity, $crystal);
+        $steal['crystal'] += $stolen;
+
+        return [
+            'metal' => (int) floor($steal['metal']),
+            'crystal' => (int) floor($steal['crystal']),
+            'deuterium' => (int) floor($steal['deuterium']),
         ];
     }
 
@@ -227,7 +255,7 @@ class BattleSimulator
      *
      * @return array<int, int>  Unit ID => count
      */
-    private function extractFleetComposition(\Xgp\App\Libraries\BattleEngine\Models\PlayerGroup $playerGroup): array
+    private function extractFleetComposition(PlayerGroup $playerGroup): array
     {
         $composition = [];
 
@@ -293,144 +321,63 @@ class BattleSimulator
     }
 
     /**
-     * Quick check: would the attacker likely win?
-     *
-     * Faster than full simulation — just compares total power.
-     *
-     * @param  array<int, int>  $attackerShips
-     * @param  array<string, mixed>  $defenderPlanet
-     */
-    public function quickWinCheck(array $attackerShips, array $defenderPlanet): bool
-    {
-        $attackerPower = $this->calculateTotalPower($attackerShips);
-        $defenderShips = $this->extractDefenderShips($defenderPlanet);
-        $defenderDefenses = $this->extractDefenderDefenses($defenderPlanet);
-        $defenderPower = $this->calculateTotalPower($defenderShips) + $this->calculateTotalPower($defenderDefenses);
-
-        // Need 1.5x power to be confident
-        return $attackerPower > ($defenderPower * 1.5);
-    }
-
-    /**
-     * Build a Fleet object from a ship ID => count array.
-     *
-     * @param  int  $fleetId
-     * @param  array<int, int>  $ships
-     */
-    private function buildFleet(int $fleetId, array $ships): Fleet
-    {
-        $fleet = new Fleet($fleetId);
-
-        foreach ($ships as $shipId => $count) {
-            if ($count <= 0) {
-                continue;
-            }
-
-            $stats = self::SHIP_STATS[$shipId] ?? null;
-
-            if ($stats === null) {
-                continue;
-            }
-
-            $shipType = new Ship(
-                id: $shipId,
-                count: $count,
-                rf: self::RAPID_FIRE[$shipId] ?? [],
-                shield: $stats['shield'],
-                cost: $stats['cost'],
-                power: $stats['power'],
-            );
-
-            $fleet->addShipType($shipType);
-        }
-
-        return $fleet;
-    }
-
-    /**
-     * Extract ship counts from a planet flat array.
+     * Ship counts from a planet flat array, by the registry's column names.
      *
      * @param  array<string, mixed>  $planet
      * @return array<int, int>
      */
     private function extractDefenderShips(array $planet): array
     {
-        $shipMap = [
-            202 => 'ship_small_cargo_ship',
-            203 => 'ship_big_cargo_ship',
-            204 => 'ship_light_fighter',
-            205 => 'ship_heavy_fighter',
-            206 => 'ship_cruiser',
-            207 => 'ship_battleship',
-            208 => 'ship_colony_ship',
-            209 => 'ship_recycler',
-            210 => 'ship_espionage_probe',
-            211 => 'ship_bomber',
-            212 => 'ship_solar_satellite',
-            213 => 'ship_destroyer',
-            214 => 'ship_deathstar',
-            215 => 'ship_reaper',
-        ];
-
-        $ships = [];
-
-        foreach ($shipMap as $id => $column) {
-            $count = (int) ($planet[$column] ?? 0);
-
-            if ($count > 0) {
-                $ships[$id] = $count;
-            }
-        }
-
-        return $ships;
+        return $this->extractUnits($planet, self::SHIP_MIN_ID, self::SHIP_MAX_ID);
     }
 
     /**
-     * Extract defense counts from a planet flat array.
+     * Defence counts from a planet flat array (401-408; missiles do not fight).
      *
      * @param  array<string, mixed>  $planet
      * @return array<int, int>
      */
     private function extractDefenderDefenses(array $planet): array
     {
-        $defenseMap = [
-            401 => 'defense_rocket_launcher',
-            402 => 'defense_light_laser',
-            403 => 'defense_heavy_laser',
-            404 => 'defense_gauss_cannon',
-            405 => 'defense_ion_cannon',
-            406 => 'defense_plasma_turret',
-            502 => 'defense_small_shield_dome',
-            503 => 'defense_large_shield_dome',
-        ];
-
-        $defenses = [];
-
-        foreach ($defenseMap as $id => $column) {
-            $count = (int) ($planet[$column] ?? 0);
-
-            if ($count > 0) {
-                $defenses[$id] = $count;
-            }
-        }
-
-        return $defenses;
+        return $this->extractUnits($planet, self::DEFENSE_MIN_ID, self::DEFENSE_MAX_ID);
     }
 
     /**
-     * Calculate total combat power of a fleet/defense.
+     * @param  array<string, mixed>  $planet
+     * @return array<int, int>
+     */
+    private function extractUnits(array $planet, int $minId, int $maxId): array
+    {
+        $units = [];
+
+        for ($id = $minId; $id <= $maxId; $id++) {
+            if (!$this->registry->has($id)) {
+                continue;
+            }
+
+            $count = (int) ($planet[$this->registry->get($id)->getName()] ?? 0);
+
+            if ($count > 0) {
+                $units[$id] = $count;
+            }
+        }
+
+        return $units;
+    }
+
+    /**
+     * Calculate total attack of a set of units.
      *
      * @param  array<int, int>  $units
      */
-    private function calculateTotalPower(array $units): int
+    private function calculateTotalPower(array $units): float
     {
-        $total = 0;
+        $total = 0.0;
 
         foreach ($units as $id => $count) {
-            $stats = self::SHIP_STATS[$id] ?? self::DEFENSE_STATS[$id] ?? null;
-
-            if ($stats) {
-                $total += $stats['power'] * $count;
+            $object = $this->registry->get((int) $id);
+            if ($object instanceof ShipObject || $object instanceof DefenseObject) {
+                $total += $object->getAttack() * $count;
             }
         }
 

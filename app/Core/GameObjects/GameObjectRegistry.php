@@ -662,7 +662,7 @@ class GameObjectRegistry
             requirements: new Collection([21 => 1]),
             shield: 1,
             attack: 1,
-            rapidFire: new Collection([210 => 1]),
+            rapidFire: new Collection(), // OGame: the satellite has no rapid fire (a stray 1 vs probes until 5 Oct 2026)
             speed: 0,
             speed2: 0,
             consumption: 0,

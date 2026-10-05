@@ -192,8 +192,10 @@ class Fire
     {
         $p = 0;
         foreach ($this->defenderFleet->getIterator() as $idFleet => $shipType_D) {
+            // OGame: rapid fire N = N shots on average, so the chance to fire again is 1 - 1/N (0 or 1 = none).
+            // Until 5 Oct 2026 this was 1 - 1/(N + 1): one shot too many per rapid fire ship (RF 6 averaged 7).
             $RF = $shipType_A->getRfTo($shipType_D);
-            $probabilityToShotAgain = 1 - GeometricDistribution::getProbabilityFromMean($RF);
+            $probabilityToShotAgain = $RF > 1 ? 1 - 1 / $RF : 0;
             $probabilityToHitThisType = $shipType_D->getCount() / $this->defenderFleet->getTotalCount();
             $p += $probabilityToShotAgain * $probabilityToHitThisType;
         }

@@ -275,7 +275,7 @@
                 @foreach([
                     401 => 'Rocket Launcher', 402 => 'Light Laser', 403 => 'Heavy Laser',
                     404 => 'Gauss Cannon', 405 => 'Ion Cannon', 406 => 'Plasma Turret',
-                    502 => 'Small Shield Dome', 503 => 'Large Shield Dome'
+                    407 => 'Small Shield Dome', 408 => 'Large Shield Dome'
                 ] as $id => $name)
                 <div class="sim-field">
                     <label for="defd_{{ $id }}">{{ $name }}</label>
@@ -378,7 +378,7 @@ function runSimulation(e) {
 
     // Collect form data
     var shipIds = [202,203,204,205,206,207,208,209,210,211,213,214,215];
-    var defenseIds = [401,402,403,404,405,406,502,503];
+    var defenseIds = [401,402,403,404,405,406,407,408];
 
     var attackerShips = {};
     shipIds.forEach(function(id) {
@@ -454,7 +454,7 @@ var SHIP_NAMES = {
 var DEFENSE_NAMES = {
     401: 'Rocket Launcher', 402: 'Light Laser', 403: 'Heavy Laser',
     404: 'Gauss Cannon', 405: 'Ion Cannon', 406: 'Plasma Turret',
-    502: 'Small Shield Dome', 503: 'Large Shield Dome'
+    407: 'Small Shield Dome', 408: 'Large Shield Dome'
 };
 
 function showResults(result, data) {

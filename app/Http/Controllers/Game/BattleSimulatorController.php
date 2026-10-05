@@ -59,7 +59,7 @@ class BattleSimulatorController extends Controller
             401 => 'defense_rocket_launcher', 402 => 'defense_light_laser',
             403 => 'defense_heavy_laser', 404 => 'defense_gauss_cannon',
             405 => 'defense_ion_cannon', 406 => 'defense_plasma_turret',
-            502 => 'defense_small_shield_dome', 503 => 'defense_large_shield_dome',
+            407 => 'defense_small_shield_dome', 408 => 'defense_large_shield_dome',
         ];
 
         $defenderPlanet = ['planet_metal' => $validated['defender_metal'] ?? 0, 'planet_crystal' => $validated['defender_crystal'] ?? 0, 'planet_deuterium' => $validated['defender_deuterium'] ?? 0];
@@ -82,7 +82,7 @@ class BattleSimulatorController extends Controller
             'research_armour_technology' => $validated['defender_armour'],
         ];
 
-        $simulator = new BattleSimulator();
+        $simulator = app(BattleSimulator::class);
         $result = $simulator->simulate($attackerShips, $defenderPlanet, $attackerUser, $defenderUser);
 
         return response()->json($result);
