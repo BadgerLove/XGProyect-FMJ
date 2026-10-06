@@ -10,10 +10,12 @@ use App\Models\Planets;
 use App\Models\ResearchQueue;
 use App\Models\User;
 use App\Models\UsersStatistics;
+use App\Services\FormatService;
 use App\Services\Game\Formulas\DevelopmentsService;
 use Illuminate\Support\Collection;
 use Xgp\App\Core\Enumerators\BuildingsEnumerator;
 use Xgp\App\Core\Enumerators\ResearchEnumerator;
+use Xgp\App\Libraries\Functions;
 use Xgp\App\Libraries\StatisticsLibrary;
 
 /**
@@ -29,6 +31,7 @@ class ResearchQueueService
         private QueueSequenceService $queueSequenceService,
         private DevelopmentDataService $developmentDataService,
         private DevelopmentsService $developmentsService,
+        private FormatService $formatService,
     ) {
     }
 
@@ -128,42 +131,9 @@ class ResearchQueueService
         }
 
         $item->delete();
-        $remaining = $user->researchQueue()->orderBy('position')->get();
-
-        if ($remaining->isNotEmpty()) {
-            $currentTime = time();
-            $astrophysicsCol = $this->registry->get(ResearchEnumerator::research_astrophysics)->getName();
-            $astrophysicsLevel = (int) $user->research->$astrophysicsCol;
-            $technocrateActive = $user->premium->premium_officier_technocrat > $currentTime;
-
-            $this->rebuildQueueAfterHeadRemoval(
-                $remaining,
-                $item->tech_id,
-                $currentTime,
-                fn (ResearchQueue $queuedItem): int => $this->resolveDuration(
-                    $user,
-                    $queuedItem,
-                    $astrophysicsLevel,
-                    $technocrateActive
-                )
-            );
-
-            foreach ($remaining as $queuedItem) {
-                $queuedItem->save();
-            }
-        }
-
-        /** @var ResearchQueue|null $nextItem */
-        $nextItem = $remaining->firstWhere('position', 1);
-
-        if ($nextItem !== null) {
-            $this->startItem($user, $nextItem);
-
-            return true;
-        }
-
-        $user->research->research_current_research = 0;
-        $user->research->save();
+        $currentTime = time();
+        $this->retimeAfterHeadRemoval($user, $item->tech_id, $currentTime);
+        $this->advanceQueue($user, $currentTime);
 
         return true;
     }
@@ -212,12 +182,7 @@ class ResearchQueueService
 
             $item->delete();
             $this->shiftPositionsDown($user);
-
-            $nextItem = $user->researchQueue()->where('position', 1)->first();
-
-            if ($nextItem !== null) {
-                $this->startItem($user, $nextItem);
-            }
+            $this->advanceQueue($user, (int) $item->end_time);
         }
     }
 
@@ -240,22 +205,124 @@ class ResearchQueueService
             ->value('total_level');
     }
 
-    private function startItem(User $user, ResearchQueue $item): void
+    /**
+     * Start the item now at the head of the queue, paying for it from its planet. Queued items were only paid for
+     * when they started and nothing checked the planet could afford it, so a queue outran the stock and left the
+     * planet negative; the next resource update then clamped it to 0 and the debt vanished (Dale, 6 Oct 2026).
+     * An item the planet can't pay for is dropped with a message, like the building queue does, and the rest of
+     * the queue is re-timed from $startTime.
+     */
+    private function advanceQueue(User $user, int $startTime): void
     {
-        $planet = Planets::find($item->planet_id);
+        while (true) {
+            $item = $user->researchQueue()->orderBy('position')->first();
 
-        if ($planet !== null) {
-            $cost = $this->developmentsService->developmentPrice($item->tech_id, $item->target_level - 1);
-            $planet->planet_metal -= $cost['metal'] ?? 0;
-            $planet->planet_crystal -= $cost['crystal'] ?? 0;
-            $planet->planet_deuterium -= $cost['deuterium'] ?? 0;
-            $planet->planet_b_tech_id = $item->tech_id;
-            $planet->planet_b_tech = $item->end_time;
-            $planet->save();
+            if ($item === null) {
+                $user->research->research_current_research = 0;
+                $user->research->save();
+
+                return;
+            }
+
+            $planet = Planets::find($item->planet_id);
+            $level = $item->target_level - 1;
+
+            if ($planet !== null && $this->developmentsService->isDevelopmentPayable(
+                $this->developmentDataService->planetResources($planet),
+                $item->tech_id,
+                $level
+            )) {
+                $cost = $this->developmentsService->developmentPrice($item->tech_id, $level);
+                $planet->planet_metal -= $cost['metal'] ?? 0;
+                $planet->planet_crystal -= $cost['crystal'] ?? 0;
+                $planet->planet_deuterium -= $cost['deuterium'] ?? 0;
+                $planet->planet_b_tech_id = $item->tech_id;
+                $planet->planet_b_tech = $item->end_time;
+                $planet->save();
+
+                $user->research->research_current_research = $item->planet_id;
+                $user->research->save();
+
+                return;
+            }
+
+            if ($planet !== null) {
+                $this->sendInsufficientResourcesMessage($planet, $item);
+            }
+
+            $item->delete();
+            $this->retimeAfterHeadRemoval($user, $item->tech_id, $startTime);
+        }
+    }
+
+    private function retimeAfterHeadRemoval(User $user, int $removedTechId, int $startTime): void
+    {
+        $remaining = $user->researchQueue()->orderBy('position')->get();
+
+        if ($remaining->isEmpty()) {
+            return;
         }
 
-        $user->research->research_current_research = $item->planet_id;
-        $user->research->save();
+        $astrophysicsCol = $this->registry->get(ResearchEnumerator::research_astrophysics)->getName();
+        $astrophysicsLevel = (int) $user->research->$astrophysicsCol;
+        $technocrateActive = $user->premium->premium_officier_technocrat > time();
+
+        $this->rebuildQueueAfterHeadRemoval(
+            $remaining,
+            $removedTechId,
+            $startTime,
+            fn (ResearchQueue $queuedItem): int => $this->resolveDuration(
+                $user,
+                $queuedItem,
+                $astrophysicsLevel,
+                $technocrateActive
+            )
+        );
+
+        foreach ($remaining as $queuedItem) {
+            $queuedItem->save();
+        }
+    }
+
+    private function sendInsufficientResourcesMessage(Planets $planet, ResearchQueue $item): void
+    {
+        $price = $this->developmentsService->developmentPrice($item->tech_id, $item->target_level - 1);
+        $insufficient = [];
+
+        if (($price['metal'] ?? 0) > $planet->planet_metal) {
+            $insufficient[] = __('game/global.metal');
+        }
+        if (($price['crystal'] ?? 0) > $planet->planet_crystal) {
+            $insufficient[] = __('game/global.crystal');
+        }
+        if (($price['deuterium'] ?? 0) > $planet->planet_deuterium) {
+            $insufficient[] = __('game/global.deuterium');
+        }
+
+        $techName = __('game/technologies.' . $this->registry->get($item->tech_id)->getName());
+        $galaxyUrl = 'game.php?page=galaxy&mode=3&galaxy=' . $planet->planet_galaxy . '&system=' . $planet->planet_system;
+        $coordsText = $planet->planet_name . ' ' . $this->formatService->prettyCoords(
+            $planet->planet_galaxy,
+            $planet->planet_system,
+            $planet->planet_planet
+        );
+
+        Functions::sendMessage(
+            $planet->planet_user_id,
+            0,
+            0,
+            5,
+            __('game/research.re_queue_not_enough_resources_from'),
+            __('game/research.re_queue_not_enough_resources_subject'),
+            sprintf(
+                __('game/research.re_queue_not_enough_resources'),
+                $techName,
+                $item->target_level,
+                $this->formatService->link($galaxyUrl, $coordsText),
+                implode(', ', $insufficient)
+            ),
+            true
+        );
     }
 
     /**

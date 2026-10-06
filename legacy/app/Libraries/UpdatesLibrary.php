@@ -15,6 +15,7 @@ use App\Services\Game\Formulas\ProductionService;
 use App\Services\Game\ResearchQueueService;
 use App\Services\SettingsService;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Xgp\App\Core\Concerns\PreparesLegacySql;
 use Xgp\App\Core\Enumerators\BuildingsEnumerator as Buildings;
 use Xgp\App\Core\Enumerators\PlanetTypesEnumerator;
@@ -226,6 +227,39 @@ class UpdatesLibrary
             return;
         }
 
+        // A finished research starts the next one, which is paid for from the planet it was queued on. When that is
+        // not the planet being viewed its stored resources may be hours old, so bring them up to date first or the
+        // queue would drop research the player can afford.
+        $head = $user->researchQueue->sortBy('position')->first();
+
+        if ($head !== null && $head->end_time <= time()) {
+            $labPlanetIds = $user->researchQueue
+                ->pluck('planet_id')
+                ->unique()
+                ->reject(fn ($planetId): bool => (int) $planetId === (int) ($current_planet['planet_id'] ?? 0));
+
+            foreach ($labPlanetIds as $labPlanetId) {
+                $labPlanet = DB::selectOne(
+                    self::sql(
+                        'SELECT p.*, b.*, d.*, s.*
+                        FROM ' . PLANETS . ' AS p
+                        INNER JOIN ' . BUILDINGS . ' AS b ON b.building_planet_id = p.`planet_id`
+                        INNER JOIN ' . DEFENSES . ' AS d ON d.defense_planet_id = p.`planet_id`
+                        INNER JOIN ' . SHIPS . " AS s ON s.ship_planet_id = p.`planet_id`
+                        WHERE p.`planet_id` = '" . (int) $labPlanetId . "'
+                            AND p.`planet_user_id` = '" . $userId . "'
+                        LIMIT 1;"
+                    )
+                );
+
+                if ($labPlanet !== null) {
+                    $labPlanet = (array) $labPlanet;
+                    $labUser = $current_user;
+                    self::updatePlanetResources($labUser, $labPlanet, time());
+                }
+            }
+        }
+
         app(ResearchQueueService::class)->processCompletions($user);
 
         // Sync research levels back to the flat user array
@@ -243,6 +277,9 @@ class UpdatesLibrary
             if ($planet !== null) {
                 $current_planet['planet_b_tech_id'] = $planet->planet_b_tech_id;
                 $current_planet['planet_b_tech'] = $planet->planet_b_tech;
+                $current_planet['planet_metal'] = $planet->planet_metal;
+                $current_planet['planet_crystal'] = $planet->planet_crystal;
+                $current_planet['planet_deuterium'] = $planet->planet_deuterium;
             }
         }
     }
@@ -795,6 +832,18 @@ class UpdatesLibrary
             } else {
                 $current_planet['planet_deuterium'] = $MaxDeuteriumStorage;
             }
+        }
+
+        // Nothing should leave a planet negative. Clamping silently hid the research queue spending money it didn't
+        // have (Dale, 6 Oct 2026), so say so in the log whenever it happens.
+        if ($current_planet['planet_metal'] < 0 || $current_planet['planet_crystal'] < 0 || $current_planet['planet_deuterium'] < 0) {
+            Log::warning('Negative resources clamped to 0', [
+                'planet_id' => $current_planet['planet_id'] ?? null,
+                'user_id' => $current_planet['planet_user_id'] ?? null,
+                'metal' => $current_planet['planet_metal'],
+                'crystal' => $current_planet['planet_crystal'],
+                'deuterium' => $current_planet['planet_deuterium'],
+            ]);
         }
 
         if ($current_planet['planet_metal'] < 0) {

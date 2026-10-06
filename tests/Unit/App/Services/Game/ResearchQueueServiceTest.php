@@ -63,6 +63,7 @@ class ResearchQueueServiceTest extends TestCase
             queueSequenceService: new QueueSequenceService(),
             developmentDataService: $this->createStub(\App\Services\Game\DevelopmentDataService::class),
             developmentsService: $this->createStub(\App\Services\Game\Formulas\DevelopmentsService::class),
+            formatService: $this->createStub(\App\Services\FormatService::class),
         );
     }
 
