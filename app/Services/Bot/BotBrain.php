@@ -1520,7 +1520,8 @@ class BotBrain
 
         // Nothing at all on the planet (the intel shows no ship and no defence): cargo alone takes it, as
         // a player raids an empty planet. Until 7 Oct a raid needed combat ships, and no x1 bot had one.
-        if ($defenderPower === 0 && !empty($cargo) && $this->isUndefended($defenderPlanet)) {
+        $freshIntel = time() - (int) ($target['scanned_at'] ?? 0) <= BotSpeed::seconds(self::EMPTY_PLANET_INTEL_SECONDS);
+        if ($defenderPower === 0 && !empty($cargo) && $freshIntel && $this->isUndefended($defenderPlanet)) {
             $this->lastAttackDebug = ['tier' => 0, 'winner' => 'attacker', 'undefended' => true];
             return $cargo;
         }
@@ -1594,6 +1595,9 @@ class BotBrain
 
     /** Attack fleet sizes to try, as a share of the combat ships on the origin planet (0 = cargo only). */
     private const ATTACK_TIERS = [0.0, 0.34, 0.67, 1.0];
+
+    /** "Nothing on it" is trusted for a cargo-only raid only from a report this young (x5 terms: 2.5 h at x1). */
+    private const EMPTY_PLANET_INTEL_SECONDS = 1800;
 
     /** No ship and no defence of any kind in the defender array. */
     private function isUndefended(array $defenderPlanet): bool

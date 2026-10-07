@@ -1201,7 +1201,11 @@ class BotTick extends Command
             return 0;
         }
 
-        $targets = $this->raidTargets($bot, $user, $origin, $free);
+        // A bot that can spy (3+ probes) raids blind only owners showing no ship at all; the rest goes
+        // through spy reports and the battle sim. Highscore ship points leave out fleets that are away,
+        // so mid-game blind raids lost 110 of 434 in the sim (the spy/sim attacks: 8 of 696).
+        $maxShipPoints = (int) ($origin['ship_espionage_probe'] ?? 0) >= 3 ? 0 : self::RAID_MAX_SHIP_POINTS;
+        $targets = $this->raidTargets($bot, $user, $origin, $free, $maxShipPoints);
         $sent = 0;
         foreach ($targets as $target) {
             if ($cargos < 2 || $free <= 0) {
@@ -1234,12 +1238,12 @@ class BotTick extends Command
 
     /**
      * Raid targets nearest first: same galaxy, within RAID_RANGE_SYSTEMS, owner with 0 defence points
-     * and at most RAID_MAX_SHIP_POINTS ship points (public highscore), not on vacation, not an admin, not
+     * and at most $maxShipPoints ship points (public highscore), not on vacation, not an admin, not
      * noob-protected either way, not the bot's alliance, not raided lately, no attack of ours flying there.
      *
      * @return array<int, array{galaxy: int, system: int, planet: int, user_id: int}>
      */
-    private function raidTargets(User $bot, array $user, array $origin, int $limit): array
+    private function raidTargets(User $bot, array $user, array $origin, int $limit, int $maxShipPoints): array
     {
         $galaxy = (int) $origin['planet_galaxy'];
         $system = (int) $origin['planet_system'];
@@ -1253,11 +1257,11 @@ class BotTick extends Command
              WHERE p.planet_type = 1 AND p.planet_destroyed = 0
                AND p.planet_galaxy = ? AND p.planet_system BETWEEN ? AND ?
                AND p.planet_user_id <> ? AND u.authlevel = 0
-               AND s.user_statistic_defenses_points < 1 AND s.user_statistic_ships_points <= ?
+               AND s.user_statistic_defenses_points < 1 AND s.user_statistic_ships_points < ? + 1
                AND COALESCE(pr.preference_vacation_mode, 0) = 0
              ORDER BY ABS(p.planet_system - ?), RAND()
              LIMIT 40',
-            [$galaxy, $system - self::RAID_RANGE_SYSTEMS, $system + self::RAID_RANGE_SYSTEMS, (int) $bot->id, self::RAID_MAX_SHIP_POINTS, $system]
+            [$galaxy, $system - self::RAID_RANGE_SYSTEMS, $system + self::RAID_RANGE_SYSTEMS, (int) $bot->id, $maxShipPoints, $system]
         );
         if ($rows === []) {
             return [];
