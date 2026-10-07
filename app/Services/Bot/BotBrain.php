@@ -516,7 +516,7 @@ class BotBrain
         $mine = $this->getNextMine($planet, $user, $this->weightsForNeeds($weights, $planet, $ctx));
         if ($mine !== null) {
             $this->lastBuildingReason = 'mine';
-            return $mine;
+            return $tight ? $mine : $this->powerFirst($mine, $planet, $user);
         }
 
         // ─── 7. Facilities without the gate, then energy for the next mines ──
@@ -779,7 +779,7 @@ class BotBrain
             }
             if ($this->canPay($this->price($id, $level), $planet, $reserve)) {
                 $this->lastBuildingReason .= ' -> spend surplus while saving';
-                return $id;
+                return $id === Buildings::BUILDING_SOLAR_PLANT ? $id : $this->powerFirst($id, $planet, $user, $reserve);
             }
         }
 
@@ -790,6 +790,39 @@ class BotBrain
     private function hourly(array $planet, string $res): float
     {
         return (float) ($planet["planet_{$res}_perhour"] ?? 0);
+    }
+
+    /**
+     * A mine level that would take the planet's energy below zero: the energy building first when it can
+     * be paid (above $reserve), else the mine anyway. Mines bought from a surplus put 589 live planets
+     * into deficit on 8 Oct, and a deficit slows every mine on the planet until the Solar Plant comes.
+     *
+     * @param  array{metal?: float, crystal?: float, deuterium?: float}  $reserve
+     */
+    private function powerFirst(int $mineId, array $planet, array $user, array $reserve = []): int
+    {
+        if ($mineId === Buildings::BUILDING_SOLAR_PLANT || $mineId === Buildings::BUILDING_FUSION_REACTOR) {
+            return $mineId;
+        }
+        $formula = $this->registry->get($mineId)->getProduction();
+        if ($formula === null) {
+            return $mineId;
+        }
+        $temp = (float) ($planet['planet_temp_max'] ?? 0);
+        $tech = (int) ($user['research_energy_technology'] ?? 0);
+        $level = $this->getBuildingLevel($mineId, $planet);
+        $energy = fn (int $l): float => $l <= 0 ? 0.0 : abs($formula->calculateEnergy($l, 10, $temp, $tech));
+        if ($this->energySurplus($planet) >= $energy($level + 1) - $energy($level)) {
+            return $mineId;
+        }
+
+        $energyId = $this->ignoreAffordability ? null : $this->nextEnergyBuilding($planet, $user);
+        if ($energyId !== null && $this->canPay($this->price($energyId, $this->getBuildingLevel($energyId, $planet)), $planet, $reserve)) {
+            $this->lastBuildingReason .= ' -> power first';
+            return $energyId;
+        }
+
+        return $mineId;
     }
 
     /** Solar until level 20, then Fusion when the game allows it (Deut 5 + Energy 3), else Solar. */
@@ -1216,7 +1249,7 @@ class BotBrain
      * @param  array<string, mixed>  $user
      * @param  array{metal?: float, crystal?: float, deuterium?: float}  $reserve  left untouched for the
      *         building / research / colony ship the planet is saving for (floors below ignore it)
-     * @param  array{want_colony_ship?: bool, economy_first?: bool, main_planet?: bool, flying?: array<int, int>, military_ratio?: float}  $ctx
+     * @param  array{want_colony_ship?: bool, economy_first?: bool, main_planet?: bool, flying?: array<int, int>, military_ratio?: float, reserve_far?: bool}  $ctx
      * @return array{ship_id: int, count: int, cost: array{metal: float, crystal: float, deuterium: float}}|null
      */
     public function nextShip(array $planet, array $user, array $reserve = [], array $ctx = []): ?array
@@ -1312,7 +1345,9 @@ class BotBrain
         // Below the personality's military target the fleet/defence spend ignores the reserve: what the
         // planet saves for always outran the stock, and the sim's 1,000 bots owned 24 warships after a
         // week of raiding (7 Oct 2026).
-        $behind = isset($ctx['military_ratio']) && (float) $ctx['military_ratio'] < self::MILITARY_TARGET[$personality];
+        // Only when what the planet saves for is far off (ctx reserve_far); a near reserve is kept.
+        $behind = isset($ctx['military_ratio']) && (float) $ctx['military_ratio'] < self::MILITARY_TARGET[$personality]
+            && (bool) ($ctx['reserve_far'] ?? true);
 
         return $this->militaryOrder($planet, $user, $behind ? [] : $reserve, $personality, $have, (bool) ($ctx['economy_first'] ?? false));
     }

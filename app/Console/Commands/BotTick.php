@@ -631,12 +631,25 @@ class BotTick extends Command
                 $result['reserved']++;
             }
 
+            // How far off what the planet saves for is: military below its target may only skip past a
+            // reserve the income won't reach within RESERVE_NEAR_HOURS (else, at 15-minute ticks, a fifth
+            // of the stock went to ships every tick and the Solar Plant was never paid: 436 live bots, 8 Oct)
+            $reserveWait = 0.0;
+            foreach (['metal', 'crystal', 'deuterium'] as $res) {
+                $short = $reserve[$res] - (float) ($planet["planet_{$res}"] ?? 0);
+                if ($short > 0) {
+                    $income = (float) ($planet["planet_{$res}_perhour"] ?? 0);
+                    $reserveWait = $income > 0 ? max($reserveWait, $short / $income) : PHP_FLOAT_MAX;
+                }
+            }
+
             $shipDecision = $this->brain->nextShip($planet, $user, $reserve, [
                 'want_colony_ship' => $wantColonyShip,
                 'economy_first' => $account['colonies'] < 1,
                 'main_planet' => $isResearchPlanet || $isColonyYard,
                 'flying' => $flyingShips,
                 'military_ratio' => $militaryRatio,
+                'reserve_far' => $reserveWait > BotSpeed::hours(self::RESERVE_NEAR_HOURS),
             ]);
 
             if ($shipDecision !== null) {
@@ -1157,6 +1170,9 @@ class BotTick extends Command
 
         return $result;
     }
+
+    /** A reserve the planet's income reaches within this many hours (x5 terms: 30 h at x1) is not skipped by military spend. */
+    private const RESERVE_NEAR_HOURS = 6.0;
 
     /** Systems either side of home a cargo raid reaches. */
     private const RAID_RANGE_SYSTEMS = 6;
