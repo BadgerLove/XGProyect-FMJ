@@ -100,6 +100,9 @@ class BotBrain
     /** Save for something only if the planet's income reaches it within this many hours. */
     private const MAX_SAVE_HOURS = 96.0;
 
+    /** Saving longer than this: build from the surplus the saved-for price doesn't need. */
+    private const SPEND_WHILE_SAVING_HOURS = 0.2;
+
     /** How many hours of production storage should hold. */
     private const DEPOSIT_HOURS = 12;
 
@@ -642,7 +645,79 @@ class BotBrain
             return self::FALL_THROUGH;
         }
 
-        return $this->ignoreAffordability ? $id : null;
+        if ($this->ignoreAffordability) {
+            return $id;
+        }
+
+        if ($slowest > BotSpeed::hours(self::SPEND_WHILE_SAVING_HOURS)) {
+            $spend = $this->spendWhileSaving($cost, $planet, $user);
+            if ($spend !== null) {
+                return $spend;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * While saving, build from what the saved-for building does not need. On 6 Oct ~600 live bots
+     * sat for days saving for Shipyard / Robot 2 / Lab 1, short only deuterium (5-20 deut/h), with
+     * metal and crystal at the storage cap and their production thrown away. A Deuterium
+     * Synthesizer costs only metal and crystal, so the bottleneck's mine comes first, then energy,
+     * then the other mines; the price being saved for always stays put.
+     *
+     * @param  array{metal: float, crystal: float, deuterium: float}  $target
+     */
+    private function spendWhileSaving(array $target, array $planet, array $user): ?int
+    {
+        $nanite = (int) ($planet['building_nano_factory'] ?? 0);
+        $terraformer = (int) ($planet['building_terraformer'] ?? 0);
+        $heldBack = ($nanite === 0 ? self::RESERVED_FIELDS_NANITE : 0)
+            + ($terraformer === 0 ? self::RESERVED_FIELDS_TERRAFORMER : 0);
+        if ($this->freeFields($planet) - $heldBack <= 0) {
+            return null;
+        }
+
+        $reserve = [];
+        $waits = [];
+        foreach (['metal', 'crystal', 'deuterium'] as $res) {
+            $have = (float) ($planet["planet_{$res}"] ?? 0);
+            $reserve[$res] = min($target[$res], $have);
+            if ($target[$res] > $have) {
+                $waits[$res] = ($target[$res] - $have) / max(0.001, $this->hourly($planet, $res));
+            }
+        }
+        arsort($waits);
+
+        $candidates = [];
+        foreach (array_keys($waits) as $res) {
+            $candidates[] = self::MINE_FOR[$res];
+        }
+        if ($this->isEnergyNegative($planet)) {
+            $candidates[] = Buildings::BUILDING_SOLAR_PLANT;
+        }
+
+        $others = [];
+        foreach (self::MINE_FOR as $mineId) {
+            if (!in_array($mineId, $candidates, true)) {
+                $others[$mineId] = ROICalculator::calcBuildingDOIR($planet, $mineId, $this->getBuildingLevel($mineId, $planet));
+            }
+        }
+        asort($others);
+        $candidates = array_merge($candidates, array_keys($others));
+
+        foreach ($candidates as $id) {
+            $level = $this->getBuildingLevel($id, $planet);
+            if ($level >= self::BUILDING_CAPS[$id]) {
+                continue;
+            }
+            if ($this->canPay($this->price($id, $level), $planet, $reserve)) {
+                $this->lastBuildingReason .= ' -> spend surplus while saving';
+                return $id;
+            }
+        }
+
+        return null;
     }
 
     /** The planet's hourly income of a resource (the game keeps it on the planet row). */
