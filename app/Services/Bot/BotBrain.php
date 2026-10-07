@@ -100,6 +100,9 @@ class BotBrain
     /** Save for something only if the planet's income reaches it within this many hours. */
     private const MAX_SAVE_HOURS = 96.0;
 
+    /** Research (or the colony ship) the income reaches within this many hours (x5 terms) is saved for first. */
+    private const RESEARCH_FIRST_HOURS = 6.0;
+
     /** Saving longer than this: build from the surplus the saved-for price doesn't need. */
     private const SPEND_WHILE_SAVING_HOURS = 0.2;
 
@@ -119,7 +122,7 @@ class BotBrain
      * @var list<array{0: int, 1: int}>  [tech id, target level]
      */
     private const RESEARCH_GOALS = [
-        [113, 1], [115, 2], [106, 2], [115, 3], [117, 3], [106, 4], [124, 1],   // first colony
+        [113, 1], [115, 2], [108, 1], [106, 2], [115, 3], [117, 3], [106, 4], [124, 1],   // cargos + a 4th fleet slot, first colony
         [108, 2], [124, 3],                                                      // second colony
         [113, 3], [110, 2], [115, 6], [108, 4], [124, 5],                       // recyclers, large cargo, 3rd colony
         [111, 3], [109, 3], [117, 4], [120, 5], [121, 2], [113, 6],             // cruisers
@@ -163,8 +166,15 @@ class BotBrain
         'raider' => 0.4, 'balanced' => 0.3, 'turtle' => 0.3, 'passive' => 0.2,
     ];
 
+    /**
+     * Warships + defences (ship and defence cost / 1000, cargos, probes, recyclers and satellites not
+     * counted) as a share of the bot's total points it aims for. Below it, military spend ignores
+     * the reserve.
+     */
+    private const MILITARY_TARGET = ['raider' => 0.30, 'balanced' => 0.22, 'turtle' => 0.25, 'passive' => 0.12];
+
     /** Military spend multiplier until the first colony exists. */
-    private const ECONOMY_FIRST_SHARE = 0.25;
+    private const ECONOMY_FIRST_SHARE = 0.5;
 
     /** Turtles put this share of their military spend into defence (rest into ships). */
     private const TURTLE_DEFENCE_SHARE = 0.6;
@@ -181,8 +191,14 @@ class BotBrain
 
     private const PROBE_FLOOR = 15;
     private const PROBE_FLOOR_QUIET = 5;   // turtles + passive: enough to see who is coming
+    private const PROBE_START = 6;         // bought ahead of the reserve
     private const RECYCLER_FLOOR = 10;
-    private const SMALL_CARGO_FLOOR = 5;   // colony starter kits, moon supply, early raids
+    /** Small cargos (raids, expeditions, colony kits) until Large Cargos are allowed. */
+    private const SMALL_CARGO_FLOOR = ['raider' => 16, 'balanced' => 12, 'turtle' => 8, 'passive' => 6];
+
+    /** The first small cargos on the main planet, bought ahead of what the planet saves for. */
+    private const SMALL_CARGO_START = ['raider' => 5, 'balanced' => 4, 'turtle' => 3, 'passive' => 2];
+
     private const LARGE_CARGO_FLOOR = 10;
 
     /** Per-tick ceiling on one shipyard order, whatever the budget. */
@@ -362,6 +378,9 @@ class BotBrain
         $personality = $this->getPersonality($user);
         $weights = self::BUILDING_WEIGHTS[$personality];
         $isResearchPlanet = (bool) ($ctx['research_planet'] ?? true);
+
+        // Research / colony ship close enough to save for: buildings spend only what it doesn't need
+        $planet = $this->withSavingsSetAside($planet, $ctx);
 
         // ─── Fields ──────────────────────────────────────────────────────────
         $free = $this->freeFields($planet, (int) ($ctx['queued'] ?? 0));
@@ -573,6 +592,53 @@ class BotBrain
         }
 
         return null;
+    }
+
+    /**
+     * The research (or colony ship) the planet waits for (ctx need_*): when the planet's income reaches
+     * it within RESEARCH_FIRST_HOURS, the building brain sees only what is left after setting its
+     * price aside. Without this every level of every mine took the crystal first, and in the sim 870 of
+     * 1,000 bots sat for days short of the 4,000 crystal for Impulse Drive 1 (7 Oct 2026).
+     * Further off than that, buildings carry on and the growing income brings the research closer.
+     *
+     * @param  array<string, mixed>  $ctx
+     * @return array<string, mixed>
+     */
+    private function withSavingsSetAside(array $planet, array $ctx): array
+    {
+        if ($this->ignoreAffordability) {
+            return $planet;
+        }
+
+        $wait = 0.0;
+        $any = false;
+        foreach (['metal', 'crystal', 'deuterium'] as $res) {
+            $need = (float) ($ctx["need_{$res}"] ?? 0);
+            $have = (float) ($planet["planet_{$res}"] ?? 0);
+            if ($need <= 0) {
+                continue;
+            }
+            $any = true;
+            // Price bigger than the store: the storage step must be able to pay for the bigger store
+            $storeLevel = $this->getBuildingLevel(self::STORE_FOR[$res], $planet);
+            if ($need > 0.95 * $this->productionService->maxStorable($storeLevel)) {
+                return $planet;
+            }
+            if ($need > $have) {
+                $income = $this->hourly($planet, $res);
+                $wait = $income > 0 ? max($wait, ($need - $have) / $income) : PHP_FLOAT_MAX;
+            }
+        }
+        if (!$any || $wait > BotSpeed::hours(self::RESEARCH_FIRST_HOURS)) {
+            return $planet;
+        }
+
+        foreach (['metal', 'crystal', 'deuterium'] as $res) {
+            $have = (float) ($planet["planet_{$res}"] ?? 0);
+            $planet["planet_{$res}"] = $have - min($have, (float) ($ctx["need_{$res}"] ?? 0));
+        }
+
+        return $planet;
     }
 
     /** Mine that produces each resource. */
@@ -855,7 +921,7 @@ class BotBrain
             $need = (float) ($ctx["need_{$res}"] ?? 0);
 
             $wanted = (float) ($planet[$column] ?? 0) >= $capacity * 0.98
-                || $capacity < self::DEPOSIT_HOURS * $hourly
+                || $capacity < BotSpeed::x1Hours(self::DEPOSIT_HOURS) * $hourly
                 || $need > $capacity * 0.95;
 
             if ($wanted && $this->canAfford($storageId, $level, $planet)) {
@@ -1150,7 +1216,7 @@ class BotBrain
      * @param  array<string, mixed>  $user
      * @param  array{metal?: float, crystal?: float, deuterium?: float}  $reserve  left untouched for the
      *         building / research / colony ship the planet is saving for (floors below ignore it)
-     * @param  array{want_colony_ship?: bool, economy_first?: bool, main_planet?: bool}  $ctx
+     * @param  array{want_colony_ship?: bool, economy_first?: bool, main_planet?: bool, flying?: array<int, int>, military_ratio?: float}  $ctx
      * @return array{ship_id: int, count: int, cost: array{metal: float, crystal: float, deuterium: float}}|null
      */
     public function nextShip(array $planet, array $user, array $reserve = [], array $ctx = []): ?array
@@ -1161,7 +1227,10 @@ class BotBrain
 
         $personality = $this->getPersonality($user);
         $queue = $this->parseHangarQueue((string) ($planet['planet_b_hangar_id'] ?? ''));
-        $have = fn (int $id): int => (int) ($planet[$this->getShipColumn($id)] ?? 0) + ($queue[$id] ?? 0);
+        // Owned = home + hangar queue + the bot's fleets in flight (raids, expeditions): counting only
+        // what is home bought a fresh cargo floor every time the cargos were out
+        $flying = $ctx['flying'] ?? [];
+        $have = fn (int $id): int => (int) ($planet[$this->getShipColumn($id)] ?? 0) + ($queue[$id] ?? 0) + (int) ($flying[$id] ?? 0);
 
         // ─── Satellites: the field-free energy fix ───────────────────────────
         // Satellites cost 500 deuterium each — early on a Solar Plant level is far cheaper (the sim's
@@ -1186,12 +1255,29 @@ class BotBrain
             }
         }
 
+        // ─── The first small cargos (ignore the reserve, before probes) ──────
+        // Small cargos raid and run expeditions until Large Cargos are allowed. At x1 a raid pays for
+        // days of saving; the old floor of 5 above the reserve left 1,000 bots with 439 cargos and no
+        // raids (7 Oct 2026).
+        $start = self::SMALL_CARGO_START[$personality];
+        if (($ctx['main_planet'] ?? true) && $have(202) + 5 * $have(203) < $start) {
+            $order = $this->affordableOrder(202, $start - $have(202), $planet, $user, []);
+            if ($order !== null) {
+                return $order;
+            }
+        }
+
         // ─── Probes ──────────────────────────────────────────────────────────
         // Probes only on the main planets (spying starts from the attack origin); every colony
         // stocking 15-30 gave ~70 per bot in the sim.
         $probeFloor = in_array($personality, ['turtle', 'passive'], true) ? self::PROBE_FLOOR_QUIET : self::PROBE_FLOOR;
         if (($ctx['main_planet'] ?? true) && $have(210) < $probeFloor) {
-            $order = $this->affordableOrder(210, self::SHIP_CAPS[210] - $have(210), $planet, $user, []);
+            // Two spy missions' worth first, whatever is being saved for; the rest above the reserve
+            // (15 probes = 15K crystal ahead of research starved Impulse Drive in the sim, 7 Oct)
+            $start = min($probeFloor, self::PROBE_START);
+            $order = $have(210) < $start
+                ? $this->affordableOrder(210, $start - $have(210), $planet, $user, [])
+                : $this->affordableOrder(210, $probeFloor - $have(210), $planet, $user, $reserve);
             if ($order !== null) {
                 return $order;
             }
@@ -1211,15 +1297,24 @@ class BotBrain
             if ($order !== null) {
                 return $order;
             }
-        } elseif ($have(202) < self::SMALL_CARGO_FLOOR && !$this->allowed(203, $planet, $user)) {
-            $order = $this->affordableOrder(202, self::SMALL_CARGO_FLOOR - $have(202), $planet, $user, $reserve);
-            if ($order !== null) {
-                return $order;
+        } elseif (!$this->allowed(203, $planet, $user)) {
+            // The rest of the small-cargo floor, above the reserve
+            $floor = self::SMALL_CARGO_FLOOR[$personality];
+            if ($have(202) < $floor) {
+                $order = $this->affordableOrder(202, $floor - $have(202), $planet, $user, $reserve);
+                if ($order !== null) {
+                    return $order;
+                }
             }
         }
 
         // ─── Combat / defence ────────────────────────────────────────────────
-        return $this->militaryOrder($planet, $user, $reserve, $personality, $have, (bool) ($ctx['economy_first'] ?? false));
+        // Below the personality's military target the fleet/defence spend ignores the reserve: what the
+        // planet saves for always outran the stock, and the sim's 1,000 bots owned 24 warships after a
+        // week of raiding (7 Oct 2026).
+        $behind = isset($ctx['military_ratio']) && (float) $ctx['military_ratio'] < self::MILITARY_TARGET[$personality];
+
+        return $this->militaryOrder($planet, $user, $behind ? [] : $reserve, $personality, $have, (bool) ($ctx['economy_first'] ?? false));
     }
 
     /**
@@ -1423,8 +1518,15 @@ class BotBrain
         $cargo = $this->pickCargo($availableShips, (int) ceil(((int) ($target['resources'] ?? 0)) / 2));
         $defenderPower = $this->defenderPower($defenderPlanet);
 
+        // Nothing at all on the planet (the intel shows no ship and no defence): cargo alone takes it, as
+        // a player raids an empty planet. Until 7 Oct a raid needed combat ships, and no x1 bot had one.
+        if ($defenderPower === 0 && !empty($cargo) && $this->isUndefended($defenderPlanet)) {
+            $this->lastAttackDebug = ['tier' => 0, 'winner' => 'attacker', 'undefended' => true];
+            return $cargo;
+        }
+
         // Try growing shares of the combat fleet and send the smallest one the battle engine says
-        // wins within the loss limit (6 Sep).
+        // wins within the loss limit (6 Sep). Tier 0 = the cargo alone.
         $lastFleet = null;
 
         foreach (self::ATTACK_TIERS as $share) {
@@ -1437,7 +1539,7 @@ class BotBrain
                 }
             }
 
-            if (count($fleet) === count($cargo) || $fleet === $lastFleet) {
+            if (empty($fleet) || $fleet === $lastFleet) {
                 continue;
             }
             $lastFleet = $fleet;
@@ -1490,8 +1592,22 @@ class BotBrain
         return null;
     }
 
-    /** Attack fleet sizes to try, as a share of the combat ships on the origin planet. */
-    private const ATTACK_TIERS = [0.34, 0.67, 1.0];
+    /** Attack fleet sizes to try, as a share of the combat ships on the origin planet (0 = cargo only). */
+    private const ATTACK_TIERS = [0.0, 0.34, 0.67, 1.0];
+
+    /** No ship and no defence of any kind in the defender array. */
+    private function isUndefended(array $defenderPlanet): bool
+    {
+        foreach ($defenderPlanet as $key => $value) {
+            if ((str_starts_with((string) $key, 'ship_') || str_starts_with((string) $key, 'defense_'))
+                && !str_ends_with((string) $key, '_id') && (int) $value > 0
+            ) {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     /** Combat ships that go on raids. */
     private const ATTACK_SHIP_ORDER = [204, 205, 206, 207, 211, 213, 215];
@@ -1568,7 +1684,7 @@ class BotBrain
         $total = (float) ($planet['planet_metal'] ?? 0) + (float) ($planet['planet_crystal'] ?? 0) + (float) ($planet['planet_deuterium'] ?? 0);
         $hourly = (float) ($planet['planet_metal_perhour'] ?? 0) + (float) ($planet['planet_crystal_perhour'] ?? 0) + (float) ($planet['planet_deuterium_perhour'] ?? 0);
 
-        return $hourly > 0 && $total < $hourly * 5;
+        return $hourly > 0 && $total < $hourly * BotSpeed::x1Hours(5);
     }
 
     /** @return array<int, int> */

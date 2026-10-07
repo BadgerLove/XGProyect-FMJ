@@ -38,8 +38,8 @@ class BotTick extends Command
 {
     use PreparesLegacySql;
 
-    /** Fleet slots to leave free for spying/attacking when sending expeditions. */
-    private const EXPEDITION_KEEP_FREE_SLOTS = 2;
+    /** Fleet slots to leave free for spying/attacking when sending expeditions (3 slots with the admiral at Computer 0). */
+    private const EXPEDITION_KEEP_FREE_SLOTS = 1;
 
     /** Expeditions go to a system within this many of home (was up to 399 away until 29 Sep). */
     private const EXPEDITION_RANGE = 20;
@@ -56,8 +56,8 @@ class BotTick extends Command
     /** How many intel targets (richest first) to run through the battle engine per bot per tick. */
     private const ATTACK_CANDIDATES = 8;
 
-    /** Ignore intel targets holding less than this much in total — not worth the fuel or the risk. */
-    private const ATTACK_MIN_RESOURCES = 50_000;
+    /** Ignore intel targets holding less than this much in total (x5 terms: 3,000 at x1) — not worth the fuel. */
+    private const ATTACK_MIN_RESOURCES = 15_000;
 
     /**
      * Human-owned planets: a scan by ANY bot newer than this is reused (cloned into the bot's own intel)
@@ -192,7 +192,7 @@ class BotTick extends Command
 
         $this->info("Processing {$bots->count()} bots..." . ($dryRun ? ' (DRY RUN)' : ''));
 
-        $stats = ['processed' => 0, 'built' => 0, 'ships' => 0, 'researches' => 0, 'attacks' => 0, 'spies' => 0, 'fleet_saves' => 0, 'expeditions' => 0, 'harvests' => 0, 'skipped' => 0, 'errors' => 0, 'idle_planets' => 0, 'escalated' => 0, 'stuck' => 0, 'reserved' => 0, 'moon_returns' => 0, 'build_rejected' => 0, 'colonise' => 0, 'feeds' => 0];
+        $stats = ['processed' => 0, 'built' => 0, 'ships' => 0, 'researches' => 0, 'attacks' => 0, 'spies' => 0, 'fleet_saves' => 0, 'expeditions' => 0, 'harvests' => 0, 'skipped' => 0, 'errors' => 0, 'idle_planets' => 0, 'escalated' => 0, 'stuck' => 0, 'reserved' => 0, 'moon_returns' => 0, 'build_rejected' => 0, 'colonise' => 0, 'feeds' => 0, 'raids' => 0];
 
         if ($this->ladder->isEnabled()) {
             $assume = (int) $this->option('ladder-assume-idle');
@@ -240,6 +240,7 @@ class BotTick extends Command
                 $stats['build_rejected'] += $result['build_rejected'];
                 $stats['colonise'] += $result['colonise'];
                 $stats['feeds'] += $result['feeds'];
+                $stats['raids'] += $result['raids'];
 
                 if ($result['built']) {
                     $stats['built']++;
@@ -350,11 +351,11 @@ class BotTick extends Command
     {
         try {
             $line = sprintf(
-                "%s | %sprocessed=%d skipped=%d built=%d ships=%d research=%d attacks=%d spies=%d shared=%d saves=%d expeditions=%d harvests=%d moon_returns=%d colonise=%d feeds=%d build_rejected=%d errors=%d | idle_planets=%d escalated=%d stuck=%d reserved=%d | %.1fs\n",
+                "%s | %sprocessed=%d skipped=%d built=%d ships=%d research=%d attacks=%d raids=%d spies=%d shared=%d saves=%d expeditions=%d harvests=%d moon_returns=%d colonise=%d feeds=%d build_rejected=%d errors=%d | idle_planets=%d escalated=%d stuck=%d reserved=%d | %.1fs\n",
                 date('Y-m-d H:i:s'),
                 $dryRun ? 'DRY ' : '',
                 $stats['processed'], $stats['skipped'], $stats['built'], $stats['ships'], $stats['researches'],
-                $stats['attacks'], $stats['spies'], $this->sharedIntelHits, $stats['fleet_saves'], $stats['expeditions'], $stats['harvests'] ?? 0, $stats['moon_returns'] ?? 0, $stats['colonise'] ?? 0, $stats['feeds'] ?? 0, $stats['build_rejected'] ?? 0, $stats['errors'],
+                $stats['attacks'], $stats['raids'] ?? 0, $stats['spies'], $this->sharedIntelHits, $stats['fleet_saves'], $stats['expeditions'], $stats['harvests'] ?? 0, $stats['moon_returns'] ?? 0, $stats['colonise'] ?? 0, $stats['feeds'] ?? 0, $stats['build_rejected'] ?? 0, $stats['errors'],
                 $stats['idle_planets'] ?? 0, $stats['escalated'] ?? 0, $stats['stuck'] ?? 0, $stats['reserved'] ?? 0,
                 $elapsed
             );
@@ -376,7 +377,7 @@ class BotTick extends Command
             'building' => null, 'ship' => null, 'research' => null,
             'attack_target' => null, 'spy_target' => null,
             'idle_planets' => 0, 'escalated' => 0, 'stuck' => 0, 'reserved' => 0, 'moon_returns' => 0,
-            'build_rejected' => 0, 'colonise' => 0, 'feeds' => 0,
+            'build_rejected' => 0, 'colonise' => 0, 'feeds' => 0, 'raids' => 0,
         ];
 
         // Load ALL planets for this bot (not just first)
@@ -431,6 +432,8 @@ class BotTick extends Command
 
         // --- Account plan (Phase 2): research planet, colony yard, colony need ---
         $account = $this->accountPlan($bot, $user, $planetRows);
+        $flyingShips = $this->shipsInFlight((int) $bot->id);
+        $militaryRatio = $this->militaryRatio((int) $bot->id, $planetRows, $flyingShips);
         $labNeeded = 0;
 
         // --- PER-PLANET LOOP ---
@@ -595,7 +598,7 @@ class BotTick extends Command
                 $wanted = $this->brain->wantedBuildingCost($planet, $user, $buildCtx);
                 if ($wanted !== null) {
                     foreach (['metal', 'crystal', 'deuterium'] as $res) {
-                        $cap = 48 * (float) ($planet["planet_{$res}_perhour"] ?? 0);
+                        $cap = BotSpeed::x1Hours(48) * (float) ($planet["planet_{$res}_perhour"] ?? 0);
                         $reserve[$res] += min((float) $wanted[$res], max($cap, 100_000.0));
                     }
                     $saving = true;
@@ -611,7 +614,7 @@ class BotTick extends Command
             }
             if ($researchPlan !== null && !$researchPlan['affordable']) {
                 foreach (['metal', 'crystal', 'deuterium'] as $res) {
-                    $cap = 48 * (float) ($planet["planet_{$res}_perhour"] ?? 0);
+                    $cap = BotSpeed::x1Hours(48) * (float) ($planet["planet_{$res}_perhour"] ?? 0);
                     $reserve[$res] += min((float) $researchPlan['cost'][$res], max($cap, 50_000.0));
                 }
                 $saving = true;
@@ -632,6 +635,8 @@ class BotTick extends Command
                 'want_colony_ship' => $wantColonyShip,
                 'economy_first' => $account['colonies'] < 1,
                 'main_planet' => $isResearchPlanet || $isColonyYard,
+                'flying' => $flyingShips,
+                'military_ratio' => $militaryRatio,
             ]);
 
             if ($shipDecision !== null) {
@@ -1143,9 +1148,173 @@ class BotTick extends Command
         // universe) almost never did. Dale: expeditions are a massive thing for players, so they
         // should be for bots too. Raids keep first call — Phase 5 has already taken its ships, and
         // sendExpeditions() re-reads what is still at home.
+        // --- Phase 5.5: Cargo raids on undefended planets (public highscore only) ---
+        if ($personality !== 'passive') {
+            $result['raids'] = $this->cargoRaids($bot, $user, $planetRows, $dryRun);
+        }
+
         $result['expeditions'] = $this->sendExpeditions($bot, $user, $planetRows, $dryRun);
 
         return $result;
+    }
+
+    /** Systems either side of home a cargo raid reaches. */
+    private const RAID_RANGE_SYSTEMS = 6;
+
+    /** A planet this bot raided is left alone this long (x5 terms: 15 h at x1, about a store's refill). */
+    private const RAID_COOLDOWN_SECONDS = 10800;
+
+    /** Small cargos per raid: a level-0 store holds 10K per resource, half is loot, 5K per cargo. */
+    private const RAID_CARGOS = 4;
+
+    /** Raid only owners whose public ship points are at most this (a few cargos or probes, no war fleet). */
+    private const RAID_MAX_SHIP_POINTS = 12;
+
+    /** After a raid there ended in a draw or a loss (the bot's own battle report), leave the planet this long (x5 terms). */
+    private const RAID_FAILED_SKIP_SECONDS = 43200;
+
+    /**
+     * Cargo raids (7 Oct 2026): the small cargos at home go to planets in range whose owner shows 0
+     * defence points and next to no ship points on the public highscore, the way a player picks an easy
+     * farm from the galaxy view and the stats page. No spy report needed: at x1 probes come late, and
+     * until now a raid needed spy intel AND combat ships, so 1,000 bots made 0 attacks in five days.
+     * Noob protection, vacation mode, admins and the bot's own alliance are respected; one raid per
+     * planet per RAID_COOLDOWN; the spy/sim attack phase has already had first call on the fleet.
+     *
+     * @param  array<int, object|array<string, mixed>>  $planetRows
+     */
+    private function cargoRaids(User $bot, array $user, array $planetRows, bool $dryRun): int
+    {
+        $origin = $this->cargoPlanet($planetRows);
+        $cargos = (int) ($origin['ship_small_cargo_ship'] ?? 0);
+        if ($cargos < 2) {
+            return 0;
+        }
+
+        // Keep one slot for an expedition when the bot can send them
+        $astro = (int) ($user['research_astrophysics'] ?? 0);
+        $free = \Xgp\App\Libraries\FleetsLib::getMaxFleets(
+            (int) ($user['research_computer_technology'] ?? 0),
+            (int) ($user['premium_officier_admiral'] ?? 0)
+        ) - $this->dispatcher->countActiveFleets((int) $bot->id) - ($astro >= 1 ? 1 : 0);
+        if ($free <= 0) {
+            return 0;
+        }
+
+        $targets = $this->raidTargets($bot, $user, $origin, $free);
+        $sent = 0;
+        foreach ($targets as $target) {
+            if ($cargos < 2 || $free <= 0) {
+                break;
+            }
+            $count = min($cargos, self::RAID_CARGOS);
+            $where = "{$target['galaxy']}:{$target['system']}:{$target['planet']}";
+
+            if ($dryRun) {
+                $this->line("  [{$bot->id}] {$bot->name}: would raid {$where} with {$count} small cargos");
+            } else {
+                $origin = $this->refreshPlanetShips($origin);
+                $fleetId = $this->dispatcher->sendAttack($origin, $user, $target, [202 => $count]);
+                if (!$fleetId) {
+                    break; // short of fuel or ships
+                }
+                DB::table('bot_target_skip')->updateOrInsert(
+                    ['bot_user_id' => (int) $bot->id, 'galaxy' => $target['galaxy'], 'system' => $target['system'], 'planet' => $target['planet']],
+                    ['until' => time() + BotSpeed::seconds(self::RAID_COOLDOWN_SECONDS), 'set_at' => time(), 'reason' => 'raided']
+                );
+                $this->line("  [{$bot->id}] {$bot->name}: raiding {$where} with {$count} small cargos");
+            }
+            $cargos -= $count;
+            $free--;
+            $sent++;
+        }
+
+        return $sent;
+    }
+
+    /**
+     * Raid targets nearest first: same galaxy, within RAID_RANGE_SYSTEMS, owner with 0 defence points
+     * and at most RAID_MAX_SHIP_POINTS ship points (public highscore), not on vacation, not an admin, not
+     * noob-protected either way, not the bot's alliance, not raided lately, no attack of ours flying there.
+     *
+     * @return array<int, array{galaxy: int, system: int, planet: int, user_id: int}>
+     */
+    private function raidTargets(User $bot, array $user, array $origin, int $limit): array
+    {
+        $galaxy = (int) $origin['planet_galaxy'];
+        $system = (int) $origin['planet_system'];
+        $rows = DB::select(
+            'SELECT p.planet_galaxy AS galaxy, p.planet_system AS `system`, p.planet_planet AS planet, p.planet_user_id AS user_id,
+                    s.user_statistic_total_points AS points, u.ally_id
+             FROM planets p
+             JOIN users u ON u.id = p.planet_user_id
+             JOIN users_statistics s ON s.user_statistic_user_id = p.planet_user_id
+             LEFT JOIN preferences pr ON pr.preference_user_id = p.planet_user_id
+             WHERE p.planet_type = 1 AND p.planet_destroyed = 0
+               AND p.planet_galaxy = ? AND p.planet_system BETWEEN ? AND ?
+               AND p.planet_user_id <> ? AND u.authlevel = 0
+               AND s.user_statistic_defenses_points < 1 AND s.user_statistic_ships_points <= ?
+               AND COALESCE(pr.preference_vacation_mode, 0) = 0
+             ORDER BY ABS(p.planet_system - ?), RAND()
+             LIMIT 40',
+            [$galaxy, $system - self::RAID_RANGE_SYSTEMS, $system + self::RAID_RANGE_SYSTEMS, (int) $bot->id, self::RAID_MAX_SHIP_POINTS, $system]
+        );
+        if ($rows === []) {
+            return [];
+        }
+
+        $botPoints = (int) (DB::table('users_statistics')->where('user_statistic_user_id', (int) $bot->id)->value('user_statistic_total_points') ?? 0);
+        $noob = new \Xgp\App\Libraries\NoobsProtectionLib();
+        $skips = $this->loadSkips((int) $bot->id);
+        $flying = [];
+        foreach (DB::table('fleets')->where('fleet_owner', (int) $bot->id)->where('fleet_mission', Missions::ATTACK)->get(['fleet_end_galaxy', 'fleet_end_system', 'fleet_end_planet']) as $f) {
+            $flying["{$f->fleet_end_galaxy}:{$f->fleet_end_system}:{$f->fleet_end_planet}"] = true;
+        }
+        $allyId = (int) ($user['ally_id'] ?? 0);
+
+        // The bot's own battle reports: a raid there that drew or lost (cargos at home, a fighter) means stay away a while
+        $failed = [];
+        $since = date('Y-m-d H:i:s', time() - BotSpeed::seconds(self::RAID_FAILED_SKIP_SECONDS));
+        foreach (DB::table('bot_combat_log')->where('attacker_id', (int) $bot->id)->where('created_at', '>', $since)
+            ->orderBy('id')->get(['target_coords', 'result']) as $log) {
+            $failed[(string) $log->target_coords] = $log->result !== 'win';
+        }
+
+        $out = [];
+        foreach ($rows as $row) {
+            $key = "{$row->galaxy}:{$row->system}:{$row->planet}";
+            $points = (int) $row->points;
+            if (($skips[$key] ?? 0) > time() || isset($flying[$key]) || ($failed[$key] ?? false)
+                || ($allyId > 0 && (int) $row->ally_id === $allyId)
+                || $noob->isWeak($botPoints, $points) || $noob->isStrong($botPoints, $points)
+            ) {
+                continue;
+            }
+            $out[] = ['galaxy' => (int) $row->galaxy, 'system' => (int) $row->system, 'planet' => (int) $row->planet, 'user_id' => (int) $row->user_id];
+            if (count($out) >= $limit) {
+                break;
+            }
+        }
+
+        return $out;
+    }
+
+    /** The planet (not moon) holding the most small cargos, re-read: earlier phases moved ships and fuel. */
+    private function cargoPlanet(array $planetRows): array
+    {
+        $best = null;
+        foreach ($planetRows as $row) {
+            $row = (array) $row;
+            if ((int) ($row['planet_type'] ?? 1) !== 1) {
+                continue;
+            }
+            $row = $this->refreshPlanetShips($row);
+            if ($best === null || (int) $row['ship_small_cargo_ship'] > (int) $best['ship_small_cargo_ship']) {
+                $best = $row;
+            }
+        }
+
+        return $best ?? $this->refreshPlanetShips((array) $planetRows[0]);
     }
 
     /**
@@ -1548,7 +1717,7 @@ class BotTick extends Command
             }
 
             $ready = (int) ($candidate['ship_espionage_probe'] ?? 0) >= 3
-                && (float) ($candidate['planet_deuterium'] ?? 0) >= self::ORIGIN_MIN_DEUTERIUM;
+                && (float) ($candidate['planet_deuterium'] ?? 0) >= BotSpeed::amount(self::ORIGIN_MIN_DEUTERIUM);
             $key = [$ready ? 1 : 0, $strength];
 
             if ($bestKey === null || $key > $bestKey) {
@@ -2109,7 +2278,7 @@ class BotTick extends Command
         }
 
         if (array_sum($fleet) < self::EXPEDITION_MIN_COMBAT_SHIPS) {
-            return [];
+            return $this->buildCargoExpeditionFleet($planet, $isActive);
         }
 
         // Finds stop growing at the game's max expedition points (Expedition.php:
@@ -2162,6 +2331,82 @@ class BotTick extends Command
         }
 
         // Always send 1 probe for depletion reports (if available)
+        if ((int) ($planet['ship_espionage_probe'] ?? 0) >= 1) {
+            $fleet[210] = 1;
+        }
+
+        return $fleet;
+    }
+
+    /** Units that count as military for BotBrain::MILITARY_TARGET: warships and defences. */
+    private const MILITARY_UNITS = [204, 205, 206, 207, 211, 213, 214, 215, 401, 402, 403, 404, 405, 406, 407, 408];
+
+    /**
+     * Warships + defences (home and flying) in points (cost / 1000) as a share of the bot's total points.
+     *
+     * @param  array<int, object|array<string, mixed>>  $planetRows
+     * @param  array<int, int>  $flying
+     */
+    private function militaryRatio(int $botId, array $planetRows, array $flying): float
+    {
+        $registry = app(\App\Core\GameObjects\GameObjectRegistry::class);
+        $value = 0.0;
+        foreach (self::MILITARY_UNITS as $id) {
+            $count = (int) ($flying[$id] ?? 0);
+            $column = $registry->get($id)->getName();
+            foreach ($planetRows as $row) {
+                $count += (int) (((array) $row)[$column] ?? 0);
+            }
+            if ($count > 0) {
+                $price = $registry->get($id)->getPrice();
+                $value += $count * ($price->getMetal() + $price->getCrystal() + $price->getDeuterium());
+            }
+        }
+        $total = (float) (DB::table('users_statistics')->where('user_statistic_user_id', $botId)->value('user_statistic_total_points') ?? 0);
+
+        return $total > 0 ? ($value / 1000) / $total : 0.0;
+    }
+
+    /**
+     * Ships in the bot's fleets that are out (raids, expeditions, transports): ship id => count.
+     *
+     * @return array<int, int>
+     */
+    private function shipsInFlight(int $botId): array
+    {
+        $owned = [];
+        foreach (DB::table('fleets')->where('fleet_owner', $botId)->pluck('fleet_array') as $array) {
+            foreach (\Xgp\App\Libraries\FleetsLib::getFleetShipsArray((string) $array) ?: [] as $shipId => $count) {
+                $owned[(int) $shipId] = ($owned[(int) $shipId] ?? 0) + (int) $count;
+            }
+        }
+
+        return $owned;
+    }
+
+    /** Fewest cargos worth an expedition of their own. */
+    private const EXPEDITION_MIN_CARGOS = 2;
+
+    /**
+     * No war fleet yet: cargos alone go, the way early players run expeditions. Finds scale with the
+     * fleet's value and ship finds copy what is sent, so cargos grow the fleet. Half of the cargos
+     * home while awake (the rest raid), 90 % before sleep, plus one probe.
+     *
+     * @return array<int, int>
+     */
+    private function buildCargoExpeditionFleet(array $planet, bool $isActive): array
+    {
+        $share = $isActive ? self::EXPEDITION_SHARE_ACTIVE : self::EXPEDITION_SHARE_SLEEP;
+        $fleet = [];
+        foreach ([203, 202] as $shipId) {
+            $count = (int) floor(((int) ($planet[$this->shipColumn($shipId)] ?? 0)) * $share);
+            if ($count > 0) {
+                $fleet[$shipId] = $count;
+            }
+        }
+        if (($fleet[202] ?? 0) + 5 * ($fleet[203] ?? 0) < self::EXPEDITION_MIN_CARGOS) {
+            return [];
+        }
         if ((int) ($planet['ship_espionage_probe'] ?? 0) >= 1) {
             $fleet[210] = 1;
         }
