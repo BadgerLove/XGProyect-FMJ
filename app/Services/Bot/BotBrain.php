@@ -127,8 +127,8 @@ class BotBrain
     private const RESEARCH_GOALS = [
         [113, 1], [115, 2], [108, 1], [106, 2], [115, 3], [117, 3], [106, 4], [124, 1],   // cargos + a 4th fleet slot, first colony
         [108, 2], [124, 3],                                                      // second colony
-        [113, 3], [110, 2], [115, 6], [108, 4], [124, 5],                       // recyclers, large cargo, 3rd colony
-        [111, 3], [109, 3], [117, 4], [120, 5], [121, 2], [113, 6],             // cruisers
+        [113, 3], [110, 2], [115, 6], [108, 4],                                 // recyclers, large cargo
+        [111, 3], [109, 3], [117, 4], [120, 5], [121, 2], [124, 5], [113, 6],   // cruisers (8 Oct: before Astro 5, the fleet was fighters only), 3rd colony
         [124, 7], [110, 5], [113, 8], [114, 5], [118, 4], [106, 6],             // battleships, 4th colony
         [108, 10], [113, 12],                                                    // Nanite + Terraformer
         [124, 9], [109, 8], [110, 8], [111, 8], [120, 10], [121, 5], [122, 5], [117, 6], // bombers, 5th colony
@@ -1317,7 +1317,7 @@ class BotBrain
      * @param  array<string, mixed>  $user
      * @param  array{metal?: float, crystal?: float, deuterium?: float}  $reserve  left untouched for the
      *         building / research / colony ship the planet is saving for (floors below ignore it)
-     * @param  array{want_colony_ship?: bool, economy_first?: bool, main_planet?: bool, flying?: array<int, int>, military_ratio?: float, reserve_far?: bool}  $ctx
+     * @param  array{want_colony_ship?: bool, economy_first?: bool, main_planet?: bool, flying?: array<int, int>, military_ratio?: float, reserve_far?: bool, research_reserve?: array<string, float>}  $ctx
      * @return array{ship_id: int, count: int, cost: array{metal: float, crystal: float, deuterium: float}}|null
      */
     public function nextShip(array $planet, array $user, array $reserve = [], array $ctx = []): ?array
@@ -1417,7 +1417,10 @@ class BotBrain
         $behind = isset($ctx['military_ratio']) && (float) $ctx['military_ratio'] < self::MILITARY_TARGET[$personality]
             && (bool) ($ctx['reserve_far'] ?? true);
 
-        return $this->militaryOrder($planet, $user, $behind ? [] : $reserve, $personality, $have, (bool) ($ctx['economy_first'] ?? false));
+        // Research savings stay put either way: in the sim's day 45 the far-off Astrophysics 5 counted as
+        // "far", fighters took everything and research stopped for 300 bots. While a research runs there
+        // is nothing saved, so the fleet still gets its turns.
+        return $this->militaryOrder($planet, $user, $behind ? (array) ($ctx['research_reserve'] ?? []) : $reserve, $personality, $have, (bool) ($ctx['economy_first'] ?? false));
     }
 
     /**

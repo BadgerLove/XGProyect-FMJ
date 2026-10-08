@@ -612,10 +612,12 @@ class BotTick extends Command
                     }
                 }
             }
+            $researchReserve = ['metal' => 0.0, 'crystal' => 0.0, 'deuterium' => 0.0];
             if ($researchPlan !== null && !$researchPlan['affordable']) {
                 foreach (['metal', 'crystal', 'deuterium'] as $res) {
                     $cap = BotSpeed::x1Hours(48) * (float) ($planet["planet_{$res}_perhour"] ?? 0);
-                    $reserve[$res] += min((float) $researchPlan['cost'][$res], max($cap, 50_000.0));
+                    $researchReserve[$res] = min((float) $researchPlan['cost'][$res], max($cap, 50_000.0));
+                    $reserve[$res] += $researchReserve[$res];
                 }
                 $saving = true;
             }
@@ -650,6 +652,7 @@ class BotTick extends Command
                 'flying' => $flyingShips,
                 'military_ratio' => $militaryRatio,
                 'reserve_far' => $reserveWait > BotSpeed::hours(self::RESERVE_NEAR_HOURS),
+                'research_reserve' => $researchReserve,
             ]);
 
             if ($shipDecision !== null) {
