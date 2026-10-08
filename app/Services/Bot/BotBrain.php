@@ -192,9 +192,9 @@ class BotBrain
         408 => 1,    // Large Shield Dome
     ];
 
-    private const PROBE_FLOOR = 15;
-    private const PROBE_FLOOR_QUIET = 5;   // turtles + passive: enough to see who is coming
-    private const PROBE_START = 6;         // bought ahead of the reserve
+    private const PROBE_FLOOR = 9;          // 8 Oct: 1,262 probes vs 475 cargos, crystal research needed
+    private const PROBE_FLOOR_QUIET = 4;   // turtles + passive: enough to see who is coming
+    private const PROBE_START = 3;         // one spy mission, bought ahead of the reserve
     private const RECYCLER_FLOOR = 10;
     /** Small cargos (raids, expeditions, colony kits) until Large Cargos are allowed. */
     private const SMALL_CARGO_FLOOR = ['raider' => 16, 'balanced' => 12, 'turtle' => 8, 'passive' => 6];
@@ -502,8 +502,20 @@ class BotBrain
             }
         }
 
-        // ─── 3. Colonisation push + the Lab research needs ───────────────────
+        // ─── 3. The Lab research needs, then the colonisation push ───────────
+        // Lab first (8 Oct: bots with no Lab saved for Shipyard 4 for the colony ship, which needs
+        // Astrophysics, which needs research, which needs the Lab)
         $mineStart = (int) ($planet['building_metal_mine'] ?? 0) >= 5 && (int) ($planet['building_crystal_mine'] ?? 0) >= 3;
+
+        $labNeeded = (int) ($ctx['lab_needed'] ?? 0);
+        $lab = (int) ($planet['building_laboratory'] ?? 0);
+        if ($mineStart && $isResearchPlanet && $lab < $labNeeded) {
+            $this->lastBuildingReason = "lab {$labNeeded} for research";
+            $pick = $this->saveOrFix(Buildings::BUILDING_LABORATORY, $lab, $planet, $user);
+            if ($pick !== self::FALL_THROUGH) {
+                return $pick;
+            }
+        }
 
         if ($mineStart && (bool) ($ctx['colony_push'] ?? false) && (bool) ($ctx['colony_yard'] ?? false)) {
             foreach ([Buildings::BUILDING_ROBOT_FACTORY => 2, Buildings::BUILDING_HANGAR => 4] as $facility => $target) {
@@ -516,16 +528,6 @@ class BotBrain
                     }
                     break;
                 }
-            }
-        }
-
-        $labNeeded = (int) ($ctx['lab_needed'] ?? 0);
-        $lab = (int) ($planet['building_laboratory'] ?? 0);
-        if ($mineStart && $isResearchPlanet && $lab < $labNeeded) {
-            $this->lastBuildingReason = "lab {$labNeeded} for research";
-            $pick = $this->saveOrFix(Buildings::BUILDING_LABORATORY, $lab, $planet, $user);
-            if ($pick !== self::FALL_THROUGH) {
-                return $pick;
             }
         }
 
@@ -857,13 +859,19 @@ class BotBrain
             return $mineId;
         }
 
-        $energyId = $this->ignoreAffordability ? null : $this->nextEnergyBuilding($planet, $user);
+        // "What do you want?" (wantedBuildingCost): the power plant, so the shipyard reserve saves for it.
+        // It named the mine, the reserve protected the mine's price, and the fleet spent the metal the
+        // Solar Plant needed: research then waited for ever on the deuterium that mine was for (8 Oct).
+        if ($this->ignoreAffordability) {
+            return $this->energyTarget($planet, $user) ?? $mineId;
+        }
+        $energyId = $this->nextEnergyBuilding($planet, $user);
         if ($energyId !== null && $this->canPay($this->price($energyId, $this->getBuildingLevel($energyId, $planet)), $planet, $reserve)) {
             $this->lastBuildingReason .= ' -> power first';
             return $energyId;
         }
 
-        return $this->ignoreAffordability ? $mineId : null;
+        return null;
     }
 
     /** The power plant the planet should build next, affordable or not (nextEnergyBuilding's order). */
