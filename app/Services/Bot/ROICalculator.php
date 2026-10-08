@@ -105,8 +105,24 @@ class ROICalculator
             return self::calcStrategicDOIR($buildingId, $currentLevel, $totalCost);
         }
 
+        // Mines: cost and output in metal units at the usual 3:2:1 trade value (crystal 1.5, deuterium 3).
+        // Counted 1:1:1 the metal mine always looked best, and on 8 Oct the live bots sat on full metal
+        // stores waiting days for crystal.
+        if (isset(self::RESOURCE_VALUE_OF_MINE[$buildingId])) {
+            $valueCost = $cost['metal'] + 1.5 * $cost['crystal'] + 3.0 * $cost['deuterium'];
+
+            return $valueCost / ($dailyIncrease * self::RESOURCE_VALUE_OF_MINE[$buildingId]);
+        }
+
         return $totalCost / $dailyIncrease;
     }
+
+    /** Trade value (metal units) of what each mine produces. */
+    private const RESOURCE_VALUE_OF_MINE = [
+        Buildings::BUILDING_METAL_MINE => 1.0,
+        Buildings::BUILDING_CRYSTAL_MINE => 1.5,
+        Buildings::BUILDING_DEUTERIUM_SINTETIZER => 3.0,
+    ];
 
     /**
      * Calculate the daily resource increase from upgrading a building.
@@ -174,13 +190,9 @@ class ROICalculator
      */
     private static function calcMetalProduction(int $level, array $planet): float
     {
-        if ($level <= 0) return 0;
-
-        $position = (int) ($planet['planet_planet'] ?? 5);
-        $positionBonus = self::getPositionMetalBonus($position);
-        $baseProd = 30 * $positionBonus;
-
-        return $baseProd * $level * pow(1.1, $level) * BotSpeed::multiplier();
+        // The game's own formula (8 Oct: a hand-copied version added position bonuses this server
+        // does not have, +35 % metal at position 8, so metal mines always looked best)
+        return $level <= 0 ? 0.0 : self::formula(1)->calculateMetal($level, 10) * BotSpeed::multiplier();
     }
 
     /**
@@ -189,13 +201,7 @@ class ROICalculator
      */
     private static function calcCrystalProduction(int $level, array $planet): float
     {
-        if ($level <= 0) return 0;
-
-        $position = (int) ($planet['planet_planet'] ?? 5);
-        $positionBonus = self::getPositionCrystalBonus($position);
-        $baseProd = 20 * $positionBonus;
-
-        return $baseProd * $level * pow(1.1, $level) * BotSpeed::multiplier();
+        return $level <= 0 ? 0.0 : self::formula(2)->calculateCrystal($level, 10) * BotSpeed::multiplier();
     }
 
     /**
@@ -204,12 +210,15 @@ class ROICalculator
      */
     private static function calcDeuteriumProduction(int $level, array $planet): float
     {
-        if ($level <= 0) return 0;
+        // with the planet's own temperature (the copy used a fixed default: hot planets make far less)
+        $temp = (float) ($planet['planet_temp_max'] ?? self::DEFAULT_TEMP);
 
-        $temp = self::DEFAULT_TEMP; // Could use planet temp if available
-        $tempFactor = (-0.004 * $temp) + 1.36;
+        return $level <= 0 ? 0.0 : self::formula(3)->calculateDeuterium($level, 10, $temp) * BotSpeed::multiplier();
+    }
 
-        return 10 * $level * pow(1.1, $level) * $tempFactor * BotSpeed::multiplier();
+    private static function formula(int $buildingId): \App\Core\GameObjects\ProductionFormula
+    {
+        return app(\App\Core\GameObjects\GameObjectRegistry::class)->get($buildingId)->getProduction();
     }
 
     /**

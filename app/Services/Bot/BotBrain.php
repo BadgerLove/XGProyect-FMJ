@@ -100,6 +100,9 @@ class BotBrain
     /** Save for something only if the planet's income reaches it within this many hours. */
     private const MAX_SAVE_HOURS = 96.0;
 
+    /** Research waiting longer than this (x5 terms: 10 h at x1) on one resource gets that resource's mine first. */
+    private const RESEARCH_BOTTLENECK_HOURS = 2.0;
+
     /** Research (or the colony ship) the income reaches within this many hours (x5 terms) is saved for first. */
     private const RESEARCH_FIRST_HOURS = 6.0;
 
@@ -212,6 +215,9 @@ class BotBrain
      */
     private bool $ignoreAffordability = false;
 
+    /** What nextBuilding() keeps for the research / colony ship being saved for (see savingsReserve()). */
+    private array $researchReserve = [];
+
     /** Lab level the last researchPlan() needed on the research planet (0 = none). */
     public int $lastLabNeeded = 0;
 
@@ -305,7 +311,7 @@ class BotBrain
             return true;
         }
 
-        return $this->canPay($this->price($buildingId, $currentLevel), $planet);
+        return $this->canPay($this->price($buildingId, $currentLevel), $planet, $this->researchReserve);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -370,6 +376,7 @@ class BotBrain
     public function nextBuilding(array $planet, array $user, array $ctx = []): ?int
     {
         $this->lastBuildingReason = '';
+        $this->researchReserve = [];
 
         if ($this->isMoon($planet)) {
             return $this->nextMoonBuilding($planet, $user);
@@ -379,8 +386,6 @@ class BotBrain
         $weights = self::BUILDING_WEIGHTS[$personality];
         $isResearchPlanet = (bool) ($ctx['research_planet'] ?? true);
 
-        // Research / colony ship close enough to save for: buildings spend only what it doesn't need
-        $planet = $this->withSavingsSetAside($planet, $ctx);
 
         // ─── Fields ──────────────────────────────────────────────────────────
         $free = $this->freeFields($planet, (int) ($ctx['queued'] ?? 0));
@@ -435,24 +440,52 @@ class BotBrain
         }
 
         // ─── 2. Energy ───────────────────────────────────────────────────────
+        // In deficit every mine runs below 100 %: the Solar Plant (or Fusion) is the best buy there is,
+        // so save for it rather than spend the metal on anything else (8 Oct: 688 planets in deficit
+        // kept buying mines that pushed the deficit deeper and the Solar Plant further away)
         if ($this->isEnergyNegative($planet) && !$tight) {
             $energy = $this->nextEnergyBuilding($planet, $user);
             if ($energy !== null) {
                 $this->lastBuildingReason = 'energy';
                 return $energy;
             }
+            $target = $this->energyTarget($planet, $user);
+            if ($target !== null) {
+                $this->lastBuildingReason = 'energy (saving)';
+                $pick = $this->saveOrFix($target, $this->getBuildingLevel($target, $planet), $planet, $user);
+                if ($pick !== self::FALL_THROUGH) {
+                    return $pick;
+                }
+            }
         }
 
+        // Research / colony ship close enough to save for: from here on ordinary buildings may spend only
+        // what it doesn't need (power, above, comes first; its bottleneck mine and "store full" checks
+        // below see the real stock)
+        $this->researchReserve = $this->savingsReserve($planet, $ctx);
+
         // ─── 2b. Income gap: the research / colony ship being saved for needs a resource this
-        // planet does not produce at all (a fresh planet has no Deuterium Synthesizer) ───────
-        foreach (['metal', 'crystal', 'deuterium'] as $res) {
+        // planet makes none of (a fresh planet has no Deuterium Synthesizer), or so little that the
+        // wait is over RESEARCH_BOTTLENECK_HOURS: that resource's mine first. On 8 Oct live research
+        // sat on 5-30 deuterium an hour for Combustion / Energy Tech (400-1,200 deuterium) ───────
+        foreach ($this->isEnergyNegative($planet) ? [] : ['metal', 'crystal', 'deuterium'] as $res) {
             $need = (float) ($ctx["need_{$res}"] ?? 0);
-            if ($need > (float) ($planet["planet_{$res}"] ?? 0) && $this->hourly($planet, $res) <= 0) {
-                $mine = self::MINE_FOR[$res];
-                $level = $this->getBuildingLevel($mine, $planet);
-                if ($level < self::BUILDING_CAPS[$mine] && $this->canAfford($mine, $level, $planet)) {
-                    $this->lastBuildingReason = "no {$res} income";
-                    return $mine;
+            $have = (float) ($planet["planet_{$res}"] ?? 0);
+            if ($need <= $have) {
+                continue;
+            }
+            $income = $this->hourly($planet, $res);
+            if ($income > 0 && ($need - $have) / $income <= BotSpeed::hours(self::RESEARCH_BOTTLENECK_HOURS)) {
+                continue;
+            }
+            $mine = self::MINE_FOR[$res];
+            $level = $this->getBuildingLevel($mine, $planet);
+            // the real stock: this mine is what brings the research closer
+            if ($level < self::BUILDING_CAPS[$mine] && ($this->ignoreAffordability || $this->canPay($this->price($mine, $level), $planet))) {
+                $pick = $tight ? $mine : $this->powerFirst($mine, $planet, $user);
+                if ($pick !== null) {
+                    $this->lastBuildingReason = $income > 0 ? "{$res} too slow for research" : "no {$res} income";
+                    return $pick;
                 }
             }
         }
@@ -515,8 +548,11 @@ class BotBrain
         // ─── 6. Mines ────────────────────────────────────────────────────────
         $mine = $this->getNextMine($planet, $user, $this->weightsForNeeds($weights, $planet, $ctx));
         if ($mine !== null) {
-            $this->lastBuildingReason = 'mine';
-            return $tight ? $mine : $this->powerFirst($mine, $planet, $user);
+            $pick = $tight ? $mine : $this->powerFirst($mine, $planet, $user);
+            if ($pick !== null) {
+                $this->lastBuildingReason = 'mine';
+                return $pick;
+            }
         }
 
         // ─── 7. Facilities without the gate, then energy for the next mines ──
@@ -596,18 +632,20 @@ class BotBrain
 
     /**
      * The research (or colony ship) the planet waits for (ctx need_*): when the planet's income reaches
-     * it within RESEARCH_FIRST_HOURS, the building brain sees only what is left after setting its
-     * price aside. Without this every level of every mine took the crystal first, and in the sim 870 of
-     * 1,000 bots sat for days short of the 4,000 crystal for Impulse Drive 1 (7 Oct 2026).
-     * Further off than that, buildings carry on and the growing income brings the research closer.
+     * it within RESEARCH_FIRST_HOURS, its price (up to what is on hand) is the reserve ordinary
+     * buildings must leave alone (canAfford). Without it every level of every mine took the crystal
+     * first, and in the sim 870 of 1,000 bots sat for days short of the 4,000 crystal for Impulse
+     * Drive 1 (7 Oct 2026). Further off than that, buildings carry on and the income grows.
+     * (8 Oct: this used to hide the amount from the whole building brain, which also hid full stores
+     * and blocked the very mine the research waited on.)
      *
      * @param  array<string, mixed>  $ctx
-     * @return array<string, mixed>
+     * @return array{metal?: float, crystal?: float, deuterium?: float}
      */
-    private function withSavingsSetAside(array $planet, array $ctx): array
+    private function savingsReserve(array $planet, array $ctx): array
     {
         if ($this->ignoreAffordability) {
-            return $planet;
+            return [];
         }
 
         $wait = 0.0;
@@ -622,7 +660,7 @@ class BotBrain
             // Price bigger than the store: the storage step must be able to pay for the bigger store
             $storeLevel = $this->getBuildingLevel(self::STORE_FOR[$res], $planet);
             if ($need > 0.95 * $this->productionService->maxStorable($storeLevel)) {
-                return $planet;
+                return [];
             }
             if ($need > $have) {
                 $income = $this->hourly($planet, $res);
@@ -630,15 +668,15 @@ class BotBrain
             }
         }
         if (!$any || $wait > BotSpeed::hours(self::RESEARCH_FIRST_HOURS)) {
-            return $planet;
+            return [];
         }
 
+        $reserve = [];
         foreach (['metal', 'crystal', 'deuterium'] as $res) {
-            $have = (float) ($planet["planet_{$res}"] ?? 0);
-            $planet["planet_{$res}"] = $have - min($have, (float) ($ctx["need_{$res}"] ?? 0));
+            $reserve[$res] = min((float) ($planet["planet_{$res}"] ?? 0), (float) ($ctx["need_{$res}"] ?? 0));
         }
 
-        return $planet;
+        return $reserve;
     }
 
     /** Mine that produces each resource. */
@@ -740,15 +778,15 @@ class BotBrain
         $terraformer = (int) ($planet['building_terraformer'] ?? 0);
         $heldBack = ($nanite === 0 ? self::RESERVED_FIELDS_NANITE : 0)
             + ($terraformer === 0 ? self::RESERVED_FIELDS_TERRAFORMER : 0);
-        if ($this->freeFields($planet) - $heldBack <= 0) {
-            return null;
+        if ($this->freeFields($planet) - $heldBack <= 0 || $this->isEnergyNegative($planet)) {
+            return null; // full, or in deficit: the energy step saves for the power plant first
         }
 
         $reserve = [];
         $waits = [];
         foreach (['metal', 'crystal', 'deuterium'] as $res) {
             $have = (float) ($planet["planet_{$res}"] ?? 0);
-            $reserve[$res] = min($target[$res], $have);
+            $reserve[$res] = min($have, $target[$res] + (float) ($this->researchReserve[$res] ?? 0));
             if ($target[$res] > $have) {
                 $waits[$res] = ($target[$res] - $have) / max(0.001, $this->hourly($planet, $res));
             }
@@ -778,8 +816,11 @@ class BotBrain
                 continue;
             }
             if ($this->canPay($this->price($id, $level), $planet, $reserve)) {
-                $this->lastBuildingReason .= ' -> spend surplus while saving';
-                return $id === Buildings::BUILDING_SOLAR_PLANT ? $id : $this->powerFirst($id, $planet, $user, $reserve);
+                $pick = $id === Buildings::BUILDING_SOLAR_PLANT ? $id : $this->powerFirst($id, $planet, $user, $reserve);
+                if ($pick !== null) {
+                    $this->lastBuildingReason .= ' -> spend surplus while saving';
+                    return $pick;
+                }
             }
         }
 
@@ -794,12 +835,12 @@ class BotBrain
 
     /**
      * A mine level that would take the planet's energy below zero: the energy building first when it can
-     * be paid (above $reserve), else the mine anyway. Mines bought from a surplus put 589 live planets
-     * into deficit on 8 Oct, and a deficit slows every mine on the planet until the Solar Plant comes.
+     * be paid (above $reserve), else null (wait for power). Mines bought from a surplus put 589 live
+     * planets into deficit on 8 Oct, and a deficit slows every mine on the planet until the Solar Plant comes.
      *
      * @param  array{metal?: float, crystal?: float, deuterium?: float}  $reserve
      */
-    private function powerFirst(int $mineId, array $planet, array $user, array $reserve = []): int
+    private function powerFirst(int $mineId, array $planet, array $user, array $reserve = []): ?int
     {
         if ($mineId === Buildings::BUILDING_SOLAR_PLANT || $mineId === Buildings::BUILDING_FUSION_REACTOR) {
             return $mineId;
@@ -822,7 +863,19 @@ class BotBrain
             return $energyId;
         }
 
-        return $mineId;
+        return $this->ignoreAffordability ? $mineId : null;
+    }
+
+    /** The power plant the planet should build next, affordable or not (nextEnergyBuilding's order). */
+    private function energyTarget(array $planet, array $user): ?int
+    {
+        $was = $this->ignoreAffordability;
+        $this->ignoreAffordability = true;
+        try {
+            return $this->nextEnergyBuilding($planet, $user);
+        } finally {
+            $this->ignoreAffordability = $was;
+        }
     }
 
     /** Solar until level 20, then Fusion when the game allows it (Deut 5 + Energy 3), else Solar. */
@@ -1020,6 +1073,21 @@ class BotBrain
             if ((float) ($ctx["need_{$res}"] ?? 0) > (float) ($planet["planet_{$res}"] ?? 0)) {
                 $weights[$mineId] = ($weights[$mineId] ?? 1.0) * 3.0;
             }
+        }
+
+        // Keep the mines in step, as players do: the metal mine pays back fastest, but cargos, probes,
+        // fighters and most research need crystal (and research deuterium). On 8 Oct live bots sat on
+        // full metal stores waiting days for crystal.
+        $metal = $this->getBuildingLevel(Buildings::BUILDING_METAL_MINE, $planet);
+        if ($metal - $this->getBuildingLevel(Buildings::BUILDING_CRYSTAL_MINE, $planet) > 2) {
+            $weights[Buildings::BUILDING_CRYSTAL_MINE] = ($weights[Buildings::BUILDING_CRYSTAL_MINE] ?? 1.0) * 2.0;
+        }
+        if ($metal - $this->getBuildingLevel(Buildings::BUILDING_DEUTERIUM_SINTETIZER, $planet) > 4) {
+            $weights[Buildings::BUILDING_DEUTERIUM_SINTETIZER] = ($weights[Buildings::BUILDING_DEUTERIUM_SINTETIZER] ?? 1.0) * 1.5;
+        }
+        $metalCap = $this->productionService->maxStorable($this->getBuildingLevel(Buildings::BUILDING_METAL_STORE, $planet));
+        if ((float) ($planet['planet_metal'] ?? 0) >= 0.95 * $metalCap) {
+            $weights[Buildings::BUILDING_METAL_MINE] = ($weights[Buildings::BUILDING_METAL_MINE] ?? 1.0) * 0.5;
         }
 
         return $weights;
