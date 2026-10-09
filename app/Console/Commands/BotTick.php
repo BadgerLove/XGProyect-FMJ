@@ -8,6 +8,7 @@ use App\Models\Planets;
 use App\Models\User;
 use App\Services\Bot\BotBrain;
 use App\Services\Bot\BotSpeed;
+use App\Services\Bot\BuildPath;
 use App\Services\Bot\AllianceCoordinator;
 use App\Services\Bot\BattleSimulator;
 use App\Services\Bot\ColonizationService;
@@ -103,6 +104,7 @@ class BotTick extends Command
         private readonly ColonizationService $colonizer,
         private readonly HarvestService $harvester,
         private readonly PlanetLadder $ladder,
+        private readonly BuildPath $buildPath,
     ) {
         parent::__construct();
     }
@@ -436,6 +438,11 @@ class BotTick extends Command
         $militaryRatio = $this->militaryRatio((int) $bot->id, $planetRows, $flyingShips);
         $labNeeded = 0;
 
+        // Build path (Dale, 6 Oct 2026; live 9 Oct): every planet's economy and shipyard follow BuildPath;
+        // the personality still drives fleet saves and the spy/sim attacks. Moons keep their own order.
+        $path = BuildPath::forBot((int) $bot->id, is_array($profile) ? $profile : []);
+        $pathShips = $this->shipsOwned((int) $bot->id, $planetRows, $flyingShips);
+
         // --- PER-PLANET LOOP ---
         foreach ($planetRows as $planetRow) {
             $planet = (array) $planetRow;
@@ -500,7 +507,23 @@ class BotTick extends Command
             // paid on the spot: research fell from 1,400 to ~100 a day while fighters ate the crystal.
             $researchId = null;
             $researchPlan = null;
-            if ($isResearchPlanet && !$researchQueued && $planetModel) {
+
+            // --- Phase 2.4: Build path (planets; moons keep their own order below) ---
+            $pathPlanet = !$isMoonRow && $planetModel !== null;
+            $pathBuildingId = null;
+            if ($pathPlanet) {
+                [$pathBuildingId, $researchId] = $this->followPath(
+                    $bot, $path, $planet, $planetModel, $user, $account, $isResearchPlanet, $researchQueued, $pathShips, $result, $dryRun
+                );
+                if ($isResearchPlanet) {
+                    $researchQueued = true;
+                    if ($researchId !== null) {
+                        $user['research_current_research'] = $planetId;
+                    }
+                }
+            }
+
+            if (!$pathPlanet && $isResearchPlanet && !$researchQueued && $planetModel) {
                 $researchPlan = $this->brain->researchPlan($user, $planet);
                 $labNeeded = $this->brain->lastLabNeeded;
 
@@ -539,9 +562,9 @@ class BotTick extends Command
                 }
             }
 
-            $buildingId = null;
+            $buildingId = $pathBuildingId;
             $buildingQueueEmpty = $planetModel && $planetModel->buildingQueue()->count() === 0;
-            if ($buildingQueueEmpty) {
+            if ($buildingQueueEmpty && !$pathPlanet) {
                 $buildingId = $this->brain->nextBuilding($planet, $user, $buildCtx);
 
                 // Full planet whose way out (Terraformer / Nanite) is allowed now: tear one level down
@@ -594,7 +617,7 @@ class BotTick extends Command
             // ignore it; recyclers, cargo and combat only spend what is above it.
             $reserve = ['metal' => 0.0, 'crystal' => 0.0, 'deuterium' => 0.0];
             $saving = false;
-            if ($buildingQueueEmpty && $buildingId === null && !$isMoonRow) {
+            if ($buildingQueueEmpty && $buildingId === null && !$isMoonRow && !$pathPlanet) {
                 $wanted = $this->brain->wantedBuildingCost($planet, $user, $buildCtx);
                 if ($wanted !== null) {
                     foreach (['metal', 'crystal', 'deuterium'] as $res) {
@@ -645,7 +668,7 @@ class BotTick extends Command
                 }
             }
 
-            $shipDecision = $this->brain->nextShip($planet, $user, $reserve, [
+            $shipDecision = $pathPlanet ? null : $this->brain->nextShip($planet, $user, $reserve, [
                 'want_colony_ship' => $wantColonyShip,
                 'economy_first' => $account['colonies'] < 1,
                 'main_planet' => $isResearchPlanet || $isColonyYard,
@@ -1165,13 +1188,163 @@ class BotTick extends Command
         // should be for bots too. Raids keep first call — Phase 5 has already taken its ships, and
         // sendExpeditions() re-reads what is still at home.
         // --- Phase 5.5: Cargo raids on undefended planets (public highscore only) ---
-        if ($personality !== 'passive') {
+        if (BuildPath::RAIDS[$path]) {
             $result['raids'] = $this->cargoRaids($bot, $user, $planetRows, $dryRun);
         }
 
-        $result['expeditions'] = $this->sendExpeditions($bot, $user, $planetRows, $dryRun);
+        if (BuildPath::EXPEDITIONS[$path]) {
+            $result['expeditions'] = $this->sendExpeditions($bot, $user, $planetRows, $dryRun);
+        }
 
         return $result;
+    }
+
+    /**
+     * Run the bot's build path on one planet: the main (research) planet takes building, research and
+     * shipyard orders from BuildPath::plan(); any other planet grows its mines. Returns [building, research].
+     *
+     * @param  array<string, mixed>  $planet
+     * @param  array<string, mixed>  $user
+     * @param  array<string, mixed>  $account
+     * @param  array<int, int>  $pathShips  ships owned (home + queued + flying), updated here
+     * @param  array<string, mixed>  $result
+     * @return array{0: int|null, 1: int|null}
+     */
+    private function followPath(
+        User $bot, string $path, array &$planet, Planets $planetModel, array $user, array $account,
+        bool $isResearchPlanet, bool $researchQueued, array &$pathShips, array &$result, bool $dryRun
+    ): array {
+        $planetId = (int) $planet['planet_id'];
+        $where = "{$planet['planet_galaxy']}:{$planet['planet_system']}:{$planet['planet_planet']}";
+        $buildIdle = $planetModel->buildingQueue()->count() === 0;
+        $buildingId = null;
+        $researchId = null;
+
+        if (!$isResearchPlanet) {
+            $want = $buildIdle ? $this->buildPath->growColony($planet, $user) : null;
+            if ($want !== null && ($dryRun || $this->queueService->add($planetModel, $user, $want, 'build'))) {
+                $buildingId = $want;
+                $result['built'] = true;
+                $result['building'] = $this->getBuildingName($want);
+                if (!$dryRun) {
+                    $planetModel->refresh();
+                    $this->syncPlanetFromModel($planet, $planetModel);
+                }
+            }
+
+            return [$buildingId, null];
+        }
+
+        $plan = $this->buildPath->plan($path, $planet, $user, [
+            'build_idle' => $buildIdle,
+            'lab_idle' => !$researchQueued && (int) ($user['research_current_research'] ?? 0) === 0,
+            'yard_idle' => $this->brain->parseHangarQueue((string) ($planet['planet_b_hangar_id'] ?? '')) === [],
+            'ships_total' => $pathShips,
+            'colonies' => (int) $account['colonies'],
+            'colony_flying' => (int) DB::table('fleets')->where('fleet_owner', (int) $bot->id)->where('fleet_mission', Missions::COLONIZE)->where('fleet_mess', 0)->count(),
+            'colony_slots' => (int) $account['colony_slots'],
+        ]);
+
+        if ($dryRun) {
+            $this->line("  [{$bot->id}] {$bot->name} ({$path}) {$where}: build " . ($plan['building'] ?? '-') . ' research ' . ($plan['research'] ?? '-')
+                . ' ships ' . json_encode($plan['ships']) . " ({$this->buildPath->lastReason})");
+        }
+
+        if ($plan['research'] !== null) {
+            $technocrateActive = (int) ($user['premium_officier_technocrat'] ?? 0) > time();
+            if ($dryRun || $this->researchQueueService->add($bot, $planetModel, $user, $plan['research'], $technocrateActive)) {
+                $researchId = $plan['research'];
+                $result['research'] = 'research queued';
+                if (!$dryRun) {
+                    $planetModel->refresh();
+                    $this->syncPlanetFromModel($planet, $planetModel);
+                }
+            }
+        }
+
+        if ($plan['building'] !== null) {
+            if ($dryRun || $this->queueService->add($planetModel, $user, $plan['building'], 'build')) {
+                $buildingId = $plan['building'];
+                $result['built'] = true;
+                $result['building'] = $this->getBuildingName($buildingId);
+                if (!$dryRun) {
+                    $planetModel->refresh();
+                    $this->syncPlanetFromModel($planet, $planetModel);
+                }
+            } else {
+                $result['build_rejected']++;
+                $this->line("  [{$bot->id}] {$bot->name}: game refused {$this->getBuildingName($plan['building'])} on {$where} ({$path}: {$this->buildPath->lastReason})");
+            }
+        }
+
+        foreach ($plan['ships'] as $shipId => $count) {
+            if (!$dryRun) {
+                $this->queueShipProduction($planetId, $shipId, $count, $this->buildPath->unitPrice($shipId));
+                $planetModel->refresh();
+                $this->syncPlanetFromModel($planet, $planetModel);
+            }
+            $pathShips[$shipId] = ($pathShips[$shipId] ?? 0) + $count;
+            $result['ship_built'] = true;
+            $result['ship'] = $this->getShipName($shipId) . " x{$count}";
+            if ($shipId === BuildPath::COLONY_SHIP) {
+                $this->line("  [{$bot->id}] {$bot->name}: colony ship queued on {$where} ({$path})");
+            }
+        }
+
+        // The path has no research for the lab right now (raider / miner paths have almost none): keep the
+        // lab busy with the brain's research ladder from what the waiting goals leave. In the live-copy run
+        // research fell from 25 to 7 a tick without this (9 Oct).
+        $labIdle = !$researchQueued && $researchId === null && (int) ($user['research_current_research'] ?? 0) === 0;
+        if ($labIdle && !$plan['research_claimed']) {
+            $fallback = $this->brain->researchPlan($user, $planet);
+            $payable = $fallback !== null;
+            foreach ($payable ? ['metal', 'crystal', 'deuterium'] : [] as $res) {
+                if ((float) ($planet["planet_{$res}"] ?? 0) - (float) ($plan['reserve'][$res] ?? 0) < (float) $fallback['cost'][$res]) {
+                    $payable = false;
+                }
+            }
+            if ($payable) {
+                $technocrateActive = (int) ($user['premium_officier_technocrat'] ?? 0) > time();
+                if ($dryRun || $this->researchQueueService->add($bot, $planetModel, $user, $fallback['id'], $technocrateActive)) {
+                    $researchId = $fallback['id'];
+                    $result['research'] = 'research queued';
+                    if (!$dryRun) {
+                        $planetModel->refresh();
+                        $this->syncPlanetFromModel($planet, $planetModel);
+                    }
+                }
+            }
+        }
+
+        return [$buildingId, $researchId];
+    }
+
+    /**
+     * Ships of the kinds build paths count, owned by the bot: at home, in the hangar queues and in flight.
+     *
+     * @param  array<int, object|array<string, mixed>>  $planetRows
+     * @param  array<int, int>  $flying  shipsInFlight()
+     * @return array<int, int>
+     */
+    private function shipsOwned(int $botId, array $planetRows, array $flying): array
+    {
+        $owned = [];
+        foreach (BuildPath::COUNTED_SHIPS as $shipId) {
+            $owned[$shipId] = (int) ($flying[$shipId] ?? 0);
+        }
+        foreach ($planetRows as $row) {
+            $row = (array) $row;
+            foreach (BuildPath::COUNTED_SHIPS as $shipId) {
+                $owned[$shipId] += (int) ($row[$this->shipColumn($shipId)] ?? 0);
+            }
+            foreach ($this->brain->parseHangarQueue((string) ($row['planet_b_hangar_id'] ?? '')) as $shipId => $count) {
+                if (isset($owned[$shipId])) {
+                    $owned[$shipId] += $count;
+                }
+            }
+        }
+
+        return $owned;
     }
 
     /** A reserve the planet's income reaches within this many hours (x5 terms: 30 h at x1) is not skipped by military spend. */
@@ -1186,8 +1359,12 @@ class BotTick extends Command
     /** Small cargos per raid: a level-0 store holds 10K per resource, half is loot, 5K per cargo. */
     private const RAID_CARGOS = 4;
 
-    /** Raid only owners whose public ship points are at most this (a few cargos or probes, no war fleet). */
-    private const RAID_MAX_SHIP_POINTS = 12;
+    /**
+     * Raid only owners whose public ship points are at most this: probes / satellites, not a cargo. Was 12
+     * (three cargos): cargo against cargo can't hurt either side, so 1,073 of 3,295 raids on 8-9 Oct were
+     * draws with no loot.
+     */
+    private const RAID_MAX_SHIP_POINTS = 3;
 
     /** After a raid there ended in a draw or a loss (the bot's own battle report), leave the planet this long (x5 terms). */
     private const RAID_FAILED_SKIP_SECONDS = 43200;
