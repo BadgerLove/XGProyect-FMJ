@@ -1075,6 +1075,12 @@ class BotTick extends Command
 
                     $defenderId = (int) ($intelTarget['user_id'] ?? 0);
                     if ($defenderId === (int) $user['id']) continue;
+                    if ($this->humanAttackCapReached($defenderId)) {
+                        if ($dryRun) {
+                            $this->line("  [{$bot->id}] SKIP: {$defenderId} human, bot attack cap reached");
+                        }
+                        continue;
+                    }
 
                     if ($defenderId > 0) {
                         $defStats = DB::selectOne("SELECT user_statistic_total_points FROM `{$prefix}users_statistics` WHERE `user_statistic_user_id` = ?", [$defenderId]);
@@ -1147,6 +1153,7 @@ class BotTick extends Command
                     try {
                         $fleetId = $this->dispatcher->sendAttack($planet, $user, $attackTarget, $attackFleet);
                         if ($fleetId) {
+                            $this->noteHumanAttack((int) ($attackTarget['user_id'] ?? 0));
                             $result['attacked'] = true;
                             $result['attack_target'] = $coords;
                             $this->chat->sendAttackWinMessage($user, (int) ($attackTarget['user_id'] ?? 0), $personality);
@@ -1370,6 +1377,20 @@ class BotTick extends Command
     private const RAID_FAILED_SKIP_SECONDS = 43200;
 
     /**
+     * Bot attacks of any kind on one HUMAN player (landed in the window or still flying there) before every
+     * bot leaves them alone (Dale, 12 Oct 2026). Each bot only counts its own raids, so on 12 Oct ten bots
+     * hit oojerfink eleven times in 4.5 hours. Players farm by the same unwritten rule. This only holds bots
+     * back, so it gives them nothing a player couldn't see.
+     */
+    private const HUMAN_ATTACK_CAP = 3;
+
+    /** Window for HUMAN_ATTACK_CAP (x5 terms: 6 h at x1). */
+    private const HUMAN_ATTACK_WINDOW_SECONDS = 4320;
+
+    /** Bot attacks on each human, landed in the window + in flight, counting this tick's sends: user id => count. */
+    private array $humanAttacks = [];
+
+    /**
      * Cargo raids (7 Oct 2026): the small cargos at home go to planets in range whose owner shows 0
      * defence points and next to no ship points on the public highscore, the way a player picks an easy
      * farm from the galaxy view and the stats page. No spy report needed: at x1 probes come late, and
@@ -1407,6 +1428,9 @@ class BotTick extends Command
             if ($cargos < 2 || $free <= 0) {
                 break;
             }
+            if ($this->humanAttackCapReached((int) $target['user_id'])) {
+                continue;
+            }
             $count = min($cargos, self::RAID_CARGOS);
             $where = "{$target['galaxy']}:{$target['system']}:{$target['planet']}";
 
@@ -1418,6 +1442,7 @@ class BotTick extends Command
                 if (!$fleetId) {
                     break; // short of fuel or ships
                 }
+                $this->noteHumanAttack((int) $target['user_id']);
                 DB::table('bot_target_skip')->updateOrInsert(
                     ['bot_user_id' => (int) $bot->id, 'galaxy' => $target['galaxy'], 'system' => $target['system'], 'planet' => $target['planet']],
                     ['until' => time() + BotSpeed::seconds(self::RAID_COOLDOWN_SECONDS), 'set_at' => time(), 'reason' => 'raided']
@@ -1487,6 +1512,7 @@ class BotTick extends Command
             if (($skips[$key] ?? 0) > time() || isset($flying[$key]) || ($failed[$key] ?? false)
                 || ($allyId > 0 && (int) $row->ally_id === $allyId)
                 || $noob->isWeak($botPoints, $points) || $noob->isStrong($botPoints, $points)
+                || $this->humanAttackCapReached((int) $row->user_id)
             ) {
                 continue;
             }
@@ -2311,6 +2337,46 @@ class BotTick extends Command
         }
 
         return $this->humanIds[$userId];
+    }
+
+    /**
+     * Has this human already had HUMAN_ATTACK_CAP bot attacks: battles in the window (bot_combat_log, bot
+     * attackers only) plus bot attack fleets not yet processed there (fleet_mess 0), plus this tick's sends.
+     * False for bots.
+     */
+    private function humanAttackCapReached(int $userId): bool
+    {
+        if (!$this->isHumanPlayer($userId)) {
+            return false;
+        }
+        if (!array_key_exists($userId, $this->humanAttacks)) {
+            $since = date('Y-m-d H:i:s', time() - BotSpeed::seconds(self::HUMAN_ATTACK_WINDOW_SECONDS));
+            $landed = DB::table('bot_combat_log as c')
+                ->join('users as u', 'u.id', '=', 'c.attacker_id')
+                ->whereNotNull('u.bot_profile')
+                ->where('c.defender_id', $userId)
+                ->where('c.created_at', '>', $since)
+                ->count();
+            $flying = DB::table('fleets as f')
+                ->join('users as u', 'u.id', '=', 'f.fleet_owner')
+                ->whereNotNull('u.bot_profile')
+                ->where('f.fleet_target_owner', $userId)
+                ->where('f.fleet_mission', Missions::ATTACK)
+                ->where('f.fleet_mess', 0)
+                ->count();
+            $this->humanAttacks[$userId] = $landed + $flying;
+        }
+
+        return $this->humanAttacks[$userId] >= self::HUMAN_ATTACK_CAP;
+    }
+
+    /** A bot attack on this player just left: count it against the cap for the rest of the tick. */
+    private function noteHumanAttack(int $userId): void
+    {
+        $this->humanAttackCapReached($userId); // loads the count
+        if ($this->isHumanPlayer($userId)) {
+            $this->humanAttacks[$userId]++;
+        }
     }
 
     /**
