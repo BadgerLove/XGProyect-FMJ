@@ -184,48 +184,19 @@ class BuildingQueueService
 
         $firstItem->delete();
 
-        $remaining = $planet->buildingQueue()->orderBy('position')->get();
-
-        if ($remaining->isEmpty()) {
-            $planet->planet_b_building = 0;
-            $planet->save();
-
-            return true;
-        }
-
-        $roboticsCol = $this->registry->get(BuildingsEnumerator::BUILDING_ROBOT_FACTORY)->getName();
-        $naniteCol = $this->registry->get(BuildingsEnumerator::BUILDING_NANO_FACTORY)->getName();
-        $robotics = (int) ($planet->buildings?->$roboticsCol ?? 0);
-        $nanite = (int) ($planet->buildings?->$naniteCol ?? 0);
-        $this->queueSequenceService->rebuildAfterHeadRemoval(
-            $remaining,
-            $firstItem->building_id,
-            time(),
-            static fn (BuildingQueue $item): int => $item->building_id,
-            static function (BuildingQueue $item): void {
+        foreach ($planet->buildingQueue()->orderBy('position')->get() as $item) {
+            if ($item->building_id === $firstItem->building_id) {
                 $item->target_level -= 1;
-            },
-            function (BuildingQueue $item) use ($planet, $robotics, $nanite): int {
-                $itemCol = $this->registry->get($item->building_id)->getName();
-                $itemLvl = (int) ($planet->buildings?->$itemCol ?? 0);
-
-                return $item->mode === 'build'
-                    ? $this->developmentsService->developmentTime($item->building_id, $itemLvl, $robotics, $nanite, 0, 0, false)
-                    : (int) $this->developmentsService->tearDownTime($item->building_id, $itemLvl, $robotics, $nanite);
             }
-        );
 
-        foreach ($remaining as $item) {
+            $item->position -= 1;
             $item->save();
         }
 
-        $nextItem = $remaining->first();
-
-        if (!$nextItem instanceof BuildingQueue) {
-            return true;
-        }
-
-        $planet->planet_b_building = $nextItem->end_time;
+        // The next item starts now, so it pays now, as when a build finishes. It used to start unpaid and a second
+        // cancel refunded it: queue Metal then Crystal Storage, cancel both, +1,000 metal +500 crystal (Dale, 13 Oct 2026).
+        $planet->planet_b_building = 0;
+        $this->advanceQueue($planet, $user, time());
         $planet->save();
 
         return true;
