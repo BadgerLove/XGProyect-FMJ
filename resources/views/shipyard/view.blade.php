@@ -1,7 +1,7 @@
 @extends('master.game')
 
 @section('content')
-{{ $message }}
+{!! $message !!}
 <form action="" method="post" role="form">
     <table align="top" width="530">
         @foreach ($list_of_items as $item)
