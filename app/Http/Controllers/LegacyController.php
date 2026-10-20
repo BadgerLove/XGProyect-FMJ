@@ -5,9 +5,12 @@ declare(strict_types=1);
 namespace App\Http\Controllers;
 
 use App\Exceptions\LegacyView;
+use App\Models\Planets;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Routing\Controller as BaseController;
+use Illuminate\Support\Facades\Auth;
 use Symfony\Component\HttpFoundation\Response as BaseResponse;
 
 class LegacyController extends BaseController
@@ -45,6 +48,8 @@ class LegacyController extends BaseController
             $page = $request->query('page');
 
             if (is_string($page) && isset(self::PROMOTED_PAGES[$page])) {
+                $this->switchPlanet($request);
+
                 $result = app()->call(self::PROMOTED_PAGES[$page]);
 
                 return $result instanceof BaseResponse ? $result : new Response($result);
@@ -68,5 +73,29 @@ class LegacyController extends BaseController
         }
 
         return new Response($output);
+    }
+
+    /**
+     * Apply the planet dropdown (&cp=<planet id>) for promoted pages.
+     * The legacy bootstrap does this in Users::setPlanet(); promoted pages skip it.
+     */
+    private function switchPlanet(Request $request): void
+    {
+        $planetId = (int) $request->query('cp', '0');
+        $user = Auth::user();
+
+        if ($planetId === 0 || (int) $request->query('re', '0') !== 0 || !$user instanceof User) {
+            return;
+        }
+
+        $owned = Planets::where('planet_id', $planetId)
+            ->where('planet_user_id', $user->id)
+            ->where('planet_destroyed', 0)
+            ->exists();
+
+        if ($owned && $user->current_planet !== $planetId) {
+            $user->current_planet = $planetId;
+            $user->save();
+        }
     }
 }
