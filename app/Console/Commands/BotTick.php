@@ -7,8 +7,13 @@ namespace App\Console\Commands;
 use App\Models\Planets;
 use App\Models\User;
 use App\Services\Bot\BotBrain;
+use App\Services\Bot\BotClock;
 use App\Services\Bot\BotSpeed;
 use App\Services\Bot\BuildPath;
+use App\Services\Bot\Mind\BotMind;
+use App\Services\Bot\Mind\Personality as MindPersonality;
+use App\Services\Bot\Mind\Situation;
+use App\Services\Bot\Mind\SituationReader;
 use App\Services\Bot\AllianceCoordinator;
 use App\Services\Bot\BattleSimulator;
 use App\Services\Bot\ColonizationService;
@@ -105,6 +110,9 @@ class BotTick extends Command
         private readonly HarvestService $harvester,
         private readonly PlanetLadder $ladder,
         private readonly BuildPath $buildPath,
+        private readonly BotMind $mind,
+        private readonly SituationReader $situationReader,
+        private readonly \App\Services\Bot\Mind\Memory $mindMemory,
     ) {
         parent::__construct();
     }
@@ -443,12 +451,28 @@ class BotTick extends Command
         $path = BuildPath::forBot((int) $bot->id, is_array($profile) ? $profile : []);
         $pathShips = $this->shipsOwned((int) $bot->id, $planetRows, $flyingShips);
 
+        // The mind (sim, 21 Oct 2026): a scoring brain per bot instead of the path's fixed goal list
+        $useMind = $this->mindOn((int) $bot->id);
+        $mindPersonality = $useMind ? MindPersonality::forBot((int) $bot->id, $path, (string) $personality) : null;
+        $situation = $useMind ? $this->situationReader->read((int) $bot->id, $user, $planetRows, (int) $account['research_planet_id'], $flyingShips) : null;
+        if ($useMind) {
+            $this->mindRecalls($bot, $situation, $dryRun);
+            $rx = $this->mind->beginTurn($situation, $mindPersonality);
+            if (!empty($situation->memory['rx']) && ($situation->memory['rx']['until'] ?? 0) > time() && getenv('BOT_MIND_TRACE')) {
+                $this->line("  [{$bot->id}] {$bot->name} doctor: " . ($situation->memory['rx']['why'] ?? ''));
+            }
+        }
+
         // --- PER-PLANET LOOP ---
         foreach ($planetRows as $planetRow) {
             $planet = (array) $planetRow;
 
-            // --- Phase 0: Fleet save (reactive + nightly) ---
-            if ($personality !== 'passive') {
+            // --- Phase 0 (mind): the Guard advisor notices attacks by chance and finds a way out ---
+            if ($useMind) {
+                if ($this->mindGuard($bot, $situation, $mindPersonality, $planet, $user, $planetRows, $profile, $result, $dryRun)) {
+                    continue;
+                }
+            } elseif ($personality !== 'passive') {
                 $attacks = $this->protector->getIncomingAttacks($planet);
 
                 if (!empty($attacks)) {
@@ -512,9 +536,11 @@ class BotTick extends Command
             $pathPlanet = !$isMoonRow && $planetModel !== null;
             $pathBuildingId = null;
             if ($pathPlanet) {
-                [$pathBuildingId, $researchId] = $this->followPath(
-                    $bot, $path, $planet, $planetModel, $user, $account, $isResearchPlanet, $researchQueued, $pathShips, $result, $dryRun
-                );
+                [$pathBuildingId, $researchId] = $useMind
+                    ? $this->followMind($bot, $situation, $mindPersonality, $planet, $planetModel, $user, $isResearchPlanet, $researchQueued, $result, $dryRun)
+                    : $this->followPath(
+                        $bot, $path, $planet, $planetModel, $user, $account, $isResearchPlanet, $researchQueued, $pathShips, $result, $dryRun
+                    );
                 if ($isResearchPlanet) {
                     $researchQueued = true;
                     if ($researchId !== null) {
@@ -778,7 +804,8 @@ class BotTick extends Command
                 )
             ) {
                 $debrisTarget = $this->harvester->findOwnDebris($planet)
-                    ?? $this->harvester->findHarvestTarget($planet, $bot->id);
+                    ?? $this->harvester->findHarvestTarget($planet, $bot->id)
+                    ?? ($useMind ? $this->visibleDebris($situation, $planet) : null);
 
                 if ($debrisTarget !== null) {
                     $needed = $this->harvester->calcRecyclersNeeded($debrisTarget);
@@ -1195,12 +1222,17 @@ class BotTick extends Command
         // should be for bots too. Raids keep first call — Phase 5 has already taken its ships, and
         // sendExpeditions() re-reads what is still at home.
         // --- Phase 5.5: Cargo raids on undefended planets (public highscore only) ---
-        if (BuildPath::RAIDS[$path]) {
+        $rebuilding = $useMind && ($situation->rx['mode'] ?? '') === 'rebuild';
+        if ($useMind ? $mindPersonality->raid >= 0.3 && $situation->threat < 0.9 && !$rebuilding : BuildPath::RAIDS[$path]) {
             $result['raids'] = $this->cargoRaids($bot, $user, $planetRows, $dryRun);
         }
 
-        if (BuildPath::EXPEDITIONS[$path]) {
+        if ($useMind ? $mindPersonality->explore >= 0.4 && !$rebuilding : BuildPath::EXPEDITIONS[$path]) {
             $result['expeditions'] = $this->sendExpeditions($bot, $user, $planetRows, $dryRun);
+        }
+
+        if ($useMind && !$dryRun) {
+            $this->mindMemory->save((int) $bot->id, $situation->memory);
         }
 
         return $result;
@@ -1324,6 +1356,412 @@ class BotTick extends Command
         }
 
         return [$buildingId, $researchId];
+    }
+
+    /**
+     * Which bots think with the council. Live switch (Dale, 22 Oct 2026): the file storage/app/bot-mind.json,
+     * e.g. {"mode":"slice","every":10,"rest":0} = bot ids ending in 0 (~100 of 1,000); {"mode":"all"}; delete the
+     * file (or {"mode":"off"}) and every bot is back on the build paths at the next tick - no restart needed.
+     * The simulator can also use env BOT_MIND=all|half.
+     */
+    private function mindOn(int $botId): bool
+    {
+        if ($this->mindSwitch === null) {
+            $file = storage_path('app/bot-mind.json');
+            $cfg = is_file($file) ? (json_decode((string) @file_get_contents($file), true) ?: []) : [];
+            $env = (string) getenv('BOT_MIND');
+            if ($env !== '' && !isset($cfg['mode'])) {
+                $cfg = $env === 'half' ? ['mode' => 'slice', 'every' => 2, 'rest' => 0] : ['mode' => $env];
+            }
+            $this->mindSwitch = $cfg;
+        }
+        $cfg = $this->mindSwitch;
+
+        return match ((string) ($cfg['mode'] ?? 'off')) {
+            'all' => true,
+            'slice' => $botId % max(1, (int) ($cfg['every'] ?? 10)) === (int) ($cfg['rest'] ?? 0),
+            default => false,
+        };
+    }
+
+    /** @var array<string, mixed>|null */
+    private ?array $mindSwitch = null;
+
+    /**
+     * The mind's turn on one planet: building, research (research planet) and shipyard/defence orders.
+     *
+     * @return array{0: int|null, 1: int|null}
+     */
+    private function followMind(
+        User $bot, Situation $s, MindPersonality $p, array &$planet, Planets $planetModel, array $user,
+        bool $isResearchPlanet, bool $researchQueued, array &$result, bool $dryRun
+    ): array {
+        $planetId = (int) $planet['planet_id'];
+        $where = "{$planet['planet_galaxy']}:{$planet['planet_system']}:{$planet['planet_planet']}";
+        $s->user = $user;
+        // the trade writes the planet row directly: reload the model, or the game checks the build against the
+        // stock from before the trade (all 87 refused builds of the 22 Oct race were bots that had just traded)
+        if ($this->mindMerchant($bot, $s, $planet, $dryRun) && !$dryRun) {
+            $planetModel->refresh();
+        }
+        $plan = $this->mind->plan($s, $p, $planet, [
+            'build' => $planetModel->buildingQueue()->count() === 0,
+            'lab' => $isResearchPlanet && !$researchQueued && (int) ($user['research_current_research'] ?? 0) === 0,
+            'yard' => $this->brain->parseHangarQueue((string) ($planet['planet_b_hangar_id'] ?? '')) === [],
+        ]);
+        if ($dryRun || getenv('BOT_MIND_TRACE')) {
+            $this->line("  [{$bot->id}] {$bot->name} mind {$p->label} {$where}: {$plan['reason']} | top: " . implode(', ', $this->mind->lastTop));
+        }
+
+        $buildingId = null;
+        $researchId = null;
+        if ($plan['research'] !== null) {
+            $technocrateActive = (int) ($user['premium_officier_technocrat'] ?? 0) > time();
+            if ($dryRun || $this->researchQueueService->add($bot, $planetModel, $user, $plan['research'], $technocrateActive)) {
+                $researchId = $plan['research'];
+                $result['research'] = 'research queued';
+                if (!$dryRun) {
+                    $planetModel->refresh();
+                    $this->syncPlanetFromModel($planet, $planetModel);
+                }
+            }
+        }
+        if ($plan['building'] !== null) {
+            if ($dryRun || $this->queueService->add($planetModel, $user, $plan['building'], 'build')) {
+                $buildingId = $plan['building'];
+                $result['built'] = true;
+                $result['building'] = $this->getBuildingName($buildingId);
+                if (!$dryRun) {
+                    $planetModel->refresh();
+                    $this->syncPlanetFromModel($planet, $planetModel);
+                }
+            } else {
+                $result['build_rejected']++;
+                $planetModel->refresh();
+                $col = app(\App\Core\GameObjects\GameObjectRegistry::class)->get($plan['building'])->getName();
+                $this->line("  [{$bot->id}] {$bot->name}: game refused {$this->getBuildingName($plan['building'])} on {$where} (mind: {$plan['reason']})"
+                    . sprintf(' | WHY array m%.0f c%.0f d%.0f f%d/%d lvl%d | db m%.0f c%.0f d%.0f f%d/%d lvl%d q%d',
+                        $planet['planet_metal'], $planet['planet_crystal'], $planet['planet_deuterium'], $planet['planet_field_current'], $planet['planet_field_max'], (int) ($planet[$col] ?? -1),
+                        $planetModel->planet_metal, $planetModel->planet_crystal, $planetModel->planet_deuterium, $planetModel->planet_field_current, $planetModel->planet_field_max,
+                        (int) ($planetModel->buildings?->$col ?? -1), $planetModel->buildingQueue()->count()));
+            }
+        }
+        foreach ($plan['units'] as $unitId => $count) {
+            if (!$dryRun) {
+                $this->queueShipProduction($planetId, $unitId, $count, $this->mind->unitPrice($unitId));
+                $planetModel->refresh();
+                $this->syncPlanetFromModel($planet, $planetModel);
+            }
+            $s->owned[$unitId] = ($s->owned[$unitId] ?? 0) + $count;
+            $result['ship_built'] = true;
+            $result['ship'] = $this->getShipName($unitId) . " x{$count}";
+        }
+
+        return [$buildingId, $researchId];
+    }
+
+    /**
+     * The in-game merchant, on the player's terms (TraderResourcesController: 3,500 dark matter a trade, metal
+     * 2:1 crystal / 4:1 deuterium, crystal 1:2 metal / 2:1 deuterium, deuterium 1:4 metal / 1:2 crystal).
+     * A mind bot holding the dark matter trades when it drowns in one resource and starves for another,
+     * the way a player does; at most once per tick.
+     */
+    private function mindMerchant(User $bot, Situation $s, array &$planet, bool $dryRun): bool
+    {
+        $dm = (int) ($s->user['premium_dark_matter'] ?? 0);
+        if ($dm < 3500 || ($s->merchantUsed ?? false)) {
+            return false;
+        }
+        $base = ['metal' => 1.0, 'crystal' => 1.5, 'deuterium' => 3.0];
+        $rates = ['metal' => ['crystal' => 0.5, 'deuterium' => 0.25], 'crystal' => ['metal' => 2.0, 'deuterium' => 0.5], 'deuterium' => ['metal' => 4.0, 'crystal' => 2.0]];
+        $rel = [];
+        foreach ($base as $r => $b) {
+            $rel[$r] = $s->worth[$r] / $b;
+        }
+        arsort($rel);
+        $buy = array_key_first($rel);
+        $sell = array_key_last($rel);
+        if ($rel[$buy] < 1.6 || $rel[$sell] > 0.8) {
+            return false;
+        }
+        $have = (float) $planet["planet_{$sell}"];
+        if ($have * $base[$sell] < BotSpeed::amount(250_000)) { // 50k metal-worth at x1
+            return false;
+        }
+        $store = ['metal' => 'building_metal_store', 'crystal' => 'building_crystal_store', 'deuterium' => 'building_deuterium_tank'][$buy];
+        $room = app(\App\Services\Game\Formulas\ProductionService::class)->maxStorable((int) ($planet[$store] ?? 0)) - (float) $planet["planet_{$buy}"];
+        $amount = (int) floor(min(0.7 * $have, max(0.0, $room) / $rates[$sell][$buy]));
+        $gain = (int) floor($amount * $rates[$sell][$buy]);
+        if ($gain * $base[$buy] < BotSpeed::amount(100_000)) {
+            return false;
+        }
+        $s->merchantUsed = true;
+        if (!$dryRun) {
+            DB::table('premium')->where('premium_user_id', (int) $bot->id)->decrement('premium_dark_matter', 3500);
+            DB::table('planets')->where('planet_id', (int) $planet['planet_id'])->update([
+                "planet_{$sell}" => DB::raw("planet_{$sell} - {$amount}"),
+                "planet_{$buy}" => DB::raw("planet_{$buy} + {$gain}"),
+            ]);
+        }
+        $planet["planet_{$sell}"] = (float) $planet["planet_{$sell}"] - $amount;
+        $planet["planet_{$buy}"] = (float) $planet["planet_{$buy}"] + $gain;
+        $s->user['premium_dark_matter'] = $dm - 3500;
+        $this->mindTrades++;
+        $this->line("  [{$bot->id}] {$bot->name}: merchant {$amount} {$sell} -> {$gain} {$buy} (3,500 DM)");
+
+        return true;
+    }
+
+    private int $mindTrades = 0;
+
+    /**
+     * Phase 0 for mind bots: an attack is coming at this planet. The Guard advisor decides (noticed in
+     * time? stronger than them? anything worth moving?) and picks the way out; this executes it. Also the
+     * evening save for cautious characters. True = the fleet left (skip the planet's turn).
+     */
+    private function mindGuard(User $bot, Situation $s, MindPersonality $p, array &$planet, array $user, array $planetRows, $profile, array &$result, bool $dryRun): bool
+    {
+        $where = "{$planet['planet_galaxy']}:{$planet['planet_system']}:{$planet['planet_planet']}";
+        $attacks = $this->protector->getIncomingAttacks($planet);
+        if ($attacks === []) {
+            // evening save: a cautious player doesn't leave the fleet out while asleep
+            if ($p->caution >= 0.45 && is_array($profile) && !empty($profile) && $this->nearSleep($profile) && !$this->protector->hasHoldOut($planet)) {
+                $exits = $this->mindExits($s, $planet, $user, $planetRows);
+                if (!empty($exits['moon']) || !empty($exits['colony'])) {
+                    $ships = $this->homeShips($planet);
+                    if ($ships !== [] && !$dryRun && $this->dispatcher->sendHold($planet, $user, $exits['moon'] ?? $exits['colony'], $ships, BotSpeed::seconds(5760), true)) {
+                        $result['fleet_saved'] = true;
+                        $this->line("  [{$bot->id}] {$bot->name}: GUARD evening save from {$where}");
+
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        $exits = $this->mindExits($s, $planet, $user, $planetRows);
+        $ships = $this->homeShips($planet);
+        $latest = max(array_map(fn ($a) => (int) $a['fleet_end_time'], $attacks));
+        if ($ships !== [] && empty($exits['moon']) && empty($exits['colony']) && empty($exits['expedition']) && empty($exits['debris'])) {
+            $exits['recall'] = $this->recallTarget($s, $planet, $user, $ships, $latest);
+        }
+        $d = $this->mind->guard->react($s, $p, $planet, $attacks, $exits);
+        $this->line("  [{$bot->id}] {$bot->name}: GUARD {$where}: {$d['why']}");
+        if (!$d['save']) {
+            if ($d['how'] === 'spend') {
+                $s->panic[(int) $planet['planet_id']] = true;
+            }
+
+            return false;
+        }
+        if ($dryRun || $ships === []) {
+            return false;
+        }
+        $stay = max(60, $latest - time()) + BotSpeed::seconds(360);
+        $fleetId = match ($d['how']) {
+            'moon', 'colony' => $this->dispatcher->sendHold($planet, $user, $exits[$d['how']], $ships, $stay, true),
+            'expedition' => $this->dispatcher->sendExpedition($planet, $user, (int) $planet['planet_galaxy'],
+                $this->pickExpeditionSystem((int) $planet['planet_galaxy'], (int) $planet['planet_system'], (int) $bot->id), $ships, max($stay, BotSpeed::seconds(720))),
+            'debris' => $this->dispatcher->sendRecycle($planet, $user, $exits['debris'], $ships),
+            // a transport, not an attack: no alarm on the target (21 Oct: attack-and-recall saves set off chains
+            // of fleet saves across the universe), and the stock rides along and comes back with the recall
+            'recall' => $this->dispatcher->sendTransport($planet, $user, $exits['recall'], (int) $planet['planet_metal'], (int) $planet['planet_crystal'],
+                (int) (0.6 * (float) $planet['planet_deuterium']), $ships),
+            default => null,
+        };
+        if (!$fleetId) {
+            $s->panic[(int) $planet['planet_id']] = true;
+
+            return false;
+        }
+        $result['fleet_saved'] = true;
+        $this->line("  [{$bot->id}] {$bot->name}: FLEET SAVE ({$d['how']}) from {$where}");
+        if ($d['how'] === 'recall') {
+            // turn round once the attack has landed (the game's own recall: Movement > Recall)
+            $s->memory['recalls'][] = [(int) $fleetId, $latest + BotSpeed::seconds(120)];
+        }
+        if ($d['how'] === 'moon' || $d['how'] === 'colony') {
+            return true; // a hold carries the resources too
+        }
+        if ($d['how'] === 'expedition' || $d['how'] === 'debris') {
+            // players load the holds before a save: the stock rides along and comes home with the fleet
+            $this->loadSaveCargo((int) $fleetId, $planet, $ships);
+        }
+        // the ships (and maybe the stock) have left: the planet's turn must see what is really there
+        $planet = $this->refreshPlanetShips($planet);
+        // the fleet is safe but the stock is not: spend it before the attack lands
+        $s->panic[(int) $planet['planet_id']] = true;
+
+        return false;
+    }
+
+    /** Fill a fleet-save fleet's free hold with the planet's stock (crystal, then deuterium, then metal). */
+    private function loadSaveCargo(int $fleetId, array $planet, array $ships): void
+    {
+        $registry = app(\App\Core\GameObjects\GameObjectRegistry::class);
+        $hold = 0;
+        foreach ($ships as $id => $n) {
+            $hold += (int) $n * (int) $registry->get((int) $id)->getCapacity();
+        }
+        $fleet = DB::table('fleets')->where('fleet_id', $fleetId)->first(['fleet_resource_metal', 'fleet_resource_crystal', 'fleet_resource_deuterium']);
+        $row = DB::table('planets')->where('planet_id', (int) $planet['planet_id'])->first(['planet_metal', 'planet_crystal', 'planet_deuterium']);
+        if ($fleet === null || $row === null) {
+            return;
+        }
+        $free = $hold - (int) $fleet->fleet_resource_metal - (int) $fleet->fleet_resource_crystal - (int) $fleet->fleet_resource_deuterium;
+        $take = [];
+        foreach (['crystal', 'deuterium', 'metal'] as $r) {
+            $take[$r] = (int) max(0, min($free, floor((float) $row->{"planet_{$r}"})));
+            $free -= $take[$r];
+        }
+        if (array_sum($take) <= 0) {
+            return;
+        }
+        DB::table('planets')->where('planet_id', (int) $planet['planet_id'])->update([
+            'planet_metal' => DB::raw('GREATEST(0, planet_metal - ' . $take['metal'] . ')'),
+            'planet_crystal' => DB::raw('GREATEST(0, planet_crystal - ' . $take['crystal'] . ')'),
+            'planet_deuterium' => DB::raw('GREATEST(0, planet_deuterium - ' . $take['deuterium'] . ')'),
+        ]);
+        DB::table('fleets')->where('fleet_id', $fleetId)->update([
+            'fleet_resource_metal' => DB::raw('fleet_resource_metal + ' . $take['metal']),
+            'fleet_resource_crystal' => DB::raw('fleet_resource_crystal + ' . $take['crystal']),
+            'fleet_resource_deuterium' => DB::raw('fleet_resource_deuterium + ' . $take['deuterium']),
+        ]);
+    }
+
+    /**
+     * A far planet for a fly-out-and-recall fleet save: another bot's (never a human's), far enough that the
+     * fleet can't arrive before we turn it round.
+     */
+    private function recallTarget(Situation $s, array $planet, array $user, array $ships, int $latest): ?array
+    {
+        $need = max(60, $latest - time()) + BotSpeed::seconds(720);
+        $g = (int) $planet['planet_galaxy'];
+        $sys = (int) $planet['planet_system'];
+        foreach ([[$g, 120, 400], [$g, 40, 400], [$g === 1 ? 2 : 1, 0, 499]] as [$gal, $min, $max]) {
+            $rows = DB::select(
+                'SELECT p.planet_galaxy g, p.planet_system s, p.planet_planet p, p.planet_user_id u FROM planets p JOIN users u ON u.id = p.planet_user_id
+                 WHERE p.planet_galaxy = ? AND ABS(p.planet_system - ?) >= ? AND ABS(p.planet_system - ?) <= ? AND p.planet_type = 1 AND p.planet_destroyed = 0
+                   AND u.bot_profile IS NOT NULL AND p.planet_user_id <> ? ORDER BY RAND() LIMIT 4',
+                [$gal, $sys, $min, $sys, $max, $s->botId]
+            );
+            foreach ($rows as $r) {
+                $dest = ['galaxy' => (int) $r->g, 'system' => (int) $r->s, 'planet' => (int) $r->p, 'type' => 1, 'user_id' => (int) $r->u];
+                if ($this->dispatcher->flightSeconds($ships, $planet, $user, $dest) >= $need) {
+                    return $dest;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /** Turn round the attack-and-recall fleet saves whose danger has passed (the game's recall, MovementController::returnFleet). */
+    private function mindRecalls(User $bot, Situation $s, bool $dryRun): void
+    {
+        $keep = [];
+        foreach ($s->memory['recalls'] ?? [] as [$fleetId, $at]) {
+            if (time() < (int) $at) {
+                $keep[] = [$fleetId, $at];
+                continue;
+            }
+            $f = DB::table('fleets')->where('fleet_id', (int) $fleetId)->where('fleet_owner', (int) $bot->id)->where('fleet_mess', 0)
+                ->first(['fleet_creation', 'fleet_start_time']);
+            if ($f === null || $dryRun) {
+                continue;
+            }
+            $now = time();
+            DB::table('fleets')->where('fleet_id', (int) $fleetId)->update([
+                'fleet_start_time' => $now, 'fleet_end_stay' => 0, 'fleet_end_time' => $now + ($now - (int) $f->fleet_creation),
+                'fleet_target_owner' => (int) $bot->id, 'fleet_mess' => 1,
+            ]);
+            $this->line("  [{$bot->id}] {$bot->name}: recalled fleet-save {$fleetId}");
+        }
+        $s->memory['recalls'] = $keep;
+    }
+
+    /**
+     * Where this planet's fleet could fly right now: own moon, another own planet, an expedition (slot and
+     * Astrophysics), a recycle run to a debris field in the galaxy view (needs a recycler).
+     *
+     * @return array{moon: array|null, colony: array|null, expedition: bool, debris: array|null}
+     */
+    private function mindExits(Situation $s, array $planet, array $user, array $planetRows): array
+    {
+        $exits = ['moon' => null, 'colony' => null, 'expedition' => false, 'debris' => null];
+        foreach ($planetRows as $row) {
+            $r = (array) $row;
+            if ((int) $r['planet_id'] === (int) $planet['planet_id']) {
+                continue;
+            }
+            $dest = ['galaxy' => (int) $r['planet_galaxy'], 'system' => (int) $r['planet_system'], 'planet' => (int) $r['planet_planet'], 'type' => (int) $r['planet_type']];
+            if ((int) $r['planet_type'] === 3 && $dest['galaxy'] === (int) $planet['planet_galaxy'] && $dest['system'] === (int) $planet['planet_system'] && $dest['planet'] === (int) $planet['planet_planet']) {
+                $exits['moon'] = $dest;
+            } elseif ((int) $r['planet_type'] === 1 && $exits['colony'] === null) {
+                $exits['colony'] = $dest;
+            }
+        }
+        $astro = (int) ($user['research_astrophysics'] ?? 0);
+        $slotsFree = \Xgp\App\Libraries\FleetsLib::getMaxFleets((int) ($user['research_computer_technology'] ?? 0), (int) ($user['premium_officier_admiral'] ?? 0))
+            - $this->dispatcher->countActiveFleets((int) $s->botId);
+        $exits['expedition'] = $astro >= 1 && $slotsFree > 0
+            && \Xgp\App\Libraries\FleetsLib::getMaxExpeditions($astro) > $this->dispatcher->countActiveExpeditions((int) $s->botId);
+        if ((int) ($planet['ship_recycler'] ?? 0) > 0 && $slotsFree > 0) {
+            foreach ($s->debris as $d) {
+                if ($d['galaxy'] === (int) $planet['planet_galaxy'] && !($d['system'] === (int) $planet['planet_system'] && $d['planet'] === (int) $planet['planet_planet'])) {
+                    $exits['debris'] = ['galaxy' => $d['galaxy'], 'system' => $d['system'], 'planet' => $d['planet'], 'debris_metal' => $d['metal'], 'debris_crystal' => $d['crystal']];
+                    break;
+                }
+            }
+        }
+
+        return $exits;
+    }
+
+    /** Every ship at home except solar satellites (they can't fly). @return array<int, int> */
+    private function homeShips(array $planet): array
+    {
+        $ships = [];
+        foreach ([202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 213, 214, 215] as $id) {
+            $n = (int) ($planet[$this->shipColumn($id)] ?? 0);
+            if ($n > 0) {
+                $ships[$id] = $n;
+            }
+        }
+
+        return $ships;
+    }
+
+    /** Within the last hour before the bot's active window ends. */
+    private function nearSleep(array $profile): bool
+    {
+        if (!isset($profile['tz_offset'], $profile['active_end'], $profile['active_start']) || (int) $profile['active_start'] === 0 && (int) $profile['active_end'] === 24) {
+            return false;
+        }
+        $hour = BotClock::hour((int) $profile['tz_offset']);
+
+        return $hour === ((int) $profile['active_end'] - 1 + 24) % 24;
+    }
+
+    /** A debris field from the galaxy view near this planet (mind bots), nearest and biggest first. */
+    private function visibleDebris(Situation $s, array $planet): ?array
+    {
+        foreach ($s->debris as $i => $d) {
+            if ($d['own'] || abs($d['system'] - (int) $planet['planet_system']) > 8 || $d['galaxy'] !== (int) $planet['planet_galaxy']) {
+                continue;
+            }
+            unset($s->debris[$i]); // one trip per field per tick
+            $s->debris = array_values($s->debris);
+
+            return [
+                'combat_id' => 0, 'galaxy' => $d['galaxy'], 'system' => $d['system'], 'planet' => $d['planet'],
+                'debris_metal' => $d['metal'], 'debris_crystal' => $d['crystal'], 'distance' => $d['distance'],
+            ];
+        }
+
+        return null;
     }
 
     /**
@@ -2248,7 +2686,7 @@ class BotTick extends Command
         }
 
         // Current hour in bot's timezone
-        $botHour = (int) gmdate('G', time() + ($profile['tz_offset'] * 3600));
+        $botHour = BotClock::hour((int) $profile['tz_offset']);
 
         $start = (int) $profile['active_start'];
         $end = (int) $profile['active_end'];

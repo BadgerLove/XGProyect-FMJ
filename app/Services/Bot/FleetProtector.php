@@ -175,7 +175,7 @@ class FleetProtector
         }
 
         // Check if bot is about to go to sleep (within 30 min of active_end)
-        $botHour = (int) gmdate('G', time() + ($profile['tz_offset'] * 3600));
+        $botHour = BotClock::hour((int) $profile['tz_offset']);
         $activeEnd = (int) $profile['active_end'];
 
         // Not near sleep time
