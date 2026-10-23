@@ -40,11 +40,11 @@ class Leftmenu extends Component
         $modules = explode(';', $this->settingsService->getString('modules'));
         $pages = [
             ['game.php?page=overview', 'lm_overview', '', '#ffffff', false, '1', '1'],
-            ['game.php?page=supplies', 'lm_resources', '', '#ffffff', false, '1', '3'],
+            ['game.php?page=supplies', 'lm_resources', '', '#33ccff', false, '1', '3'],
             ['game.php?page=resourcesettings', 'lm_resources_settings', '', '#ffffff', false, '1', '4'],
-            ['game.php?page=facilities', 'lm_station', '', '#ffffff', false, '1', '3'],
+            ['game.php?page=facilities', 'lm_station', '', '#33ccff', false, '1', '3'],
             ['game.php?page=traderOverview', 'lm_trader', '', '#ff8900', false, '1', '5'],
-            ['game.php?page=research', 'lm_research', '', '#ffffff', false, '1', '6'],
+            ['game.php?page=research', 'lm_research', '', '#33ccff', false, '1', '6'],
             ['game.php?page=technologytree', 'lm_technology', '', '#ffffff', false, '1', '10'],
             ['game.php?page=shipyard', 'lm_shipyard', '', '#ffffff', false, '1', '7'],
             ['game.php?page=defenses', 'lm_defenses', '', '#ffffff', false, '1', '12'],
