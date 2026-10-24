@@ -202,7 +202,7 @@ class BotTick extends Command
 
         $this->info("Processing {$bots->count()} bots..." . ($dryRun ? ' (DRY RUN)' : ''));
 
-        $stats = ['processed' => 0, 'built' => 0, 'ships' => 0, 'researches' => 0, 'attacks' => 0, 'spies' => 0, 'fleet_saves' => 0, 'expeditions' => 0, 'harvests' => 0, 'skipped' => 0, 'errors' => 0, 'idle_planets' => 0, 'escalated' => 0, 'stuck' => 0, 'reserved' => 0, 'moon_returns' => 0, 'build_rejected' => 0, 'colonise' => 0, 'feeds' => 0, 'raids' => 0];
+        $stats = ['processed' => 0, 'built' => 0, 'ships' => 0, 'researches' => 0, 'attacks' => 0, 'spies' => 0, 'fleet_saves' => 0, 'expeditions' => 0, 'harvests' => 0, 'skipped' => 0, 'errors' => 0, 'idle_planets' => 0, 'escalated' => 0, 'stuck' => 0, 'reserved' => 0, 'moon_returns' => 0, 'build_rejected' => 0, 'colonise' => 0, 'feeds' => 0, 'raids' => 0, 'planets' => 0, 'saving_idle' => 0];
 
         if ($this->ladder->isEnabled()) {
             $assume = (int) $this->option('ladder-assume-idle');
@@ -251,6 +251,8 @@ class BotTick extends Command
                 $stats['colonise'] += $result['colonise'];
                 $stats['feeds'] += $result['feeds'];
                 $stats['raids'] += $result['raids'];
+                $stats['planets'] += $result['planets'];
+                $stats['saving_idle'] += $result['saving_idle'];
 
                 if ($result['built']) {
                     $stats['built']++;
@@ -361,12 +363,13 @@ class BotTick extends Command
     {
         try {
             $line = sprintf(
-                "%s | %sprocessed=%d skipped=%d built=%d ships=%d research=%d attacks=%d raids=%d spies=%d shared=%d saves=%d expeditions=%d harvests=%d moon_returns=%d colonise=%d feeds=%d build_rejected=%d errors=%d | idle_planets=%d escalated=%d stuck=%d reserved=%d | %.1fs\n",
+                "%s | %sprocessed=%d skipped=%d built=%d ships=%d research=%d attacks=%d raids=%d spies=%d shared=%d saves=%d expeditions=%d harvests=%d moon_returns=%d colonise=%d feeds=%d build_rejected=%d errors=%d | idle_planets=%d escalated=%d stuck=%d reserved=%d planets=%d saving_idle=%d | %.1fs\n",
                 date('Y-m-d H:i:s'),
                 $dryRun ? 'DRY ' : '',
                 $stats['processed'], $stats['skipped'], $stats['built'], $stats['ships'], $stats['researches'],
                 $stats['attacks'], $stats['raids'] ?? 0, $stats['spies'], $this->sharedIntelHits, $stats['fleet_saves'], $stats['expeditions'], $stats['harvests'] ?? 0, $stats['moon_returns'] ?? 0, $stats['colonise'] ?? 0, $stats['feeds'] ?? 0, $stats['build_rejected'] ?? 0, $stats['errors'],
                 $stats['idle_planets'] ?? 0, $stats['escalated'] ?? 0, $stats['stuck'] ?? 0, $stats['reserved'] ?? 0,
+                $stats['planets'] ?? 0, $stats['saving_idle'] ?? 0,
                 $elapsed
             );
             file_put_contents(storage_path('logs/bot-tick-' . date('Y-m') . '.log'), $line, FILE_APPEND | LOCK_EX);
@@ -387,7 +390,7 @@ class BotTick extends Command
             'building' => null, 'ship' => null, 'research' => null,
             'attack_target' => null, 'spy_target' => null,
             'idle_planets' => 0, 'escalated' => 0, 'stuck' => 0, 'reserved' => 0, 'moon_returns' => 0,
-            'build_rejected' => 0, 'colonise' => 0, 'feeds' => 0, 'raids' => 0,
+            'build_rejected' => 0, 'colonise' => 0, 'feeds' => 0, 'raids' => 0, 'planets' => 0, 'saving_idle' => 0,
         ];
 
         // Load ALL planets for this bot (not just first)
@@ -466,6 +469,7 @@ class BotTick extends Command
         // --- PER-PLANET LOOP ---
         foreach ($planetRows as $planetRow) {
             $planet = (array) $planetRow;
+            $this->mindPlanetSaving = false;
 
             // --- Phase 0 (mind): the Guard advisor notices attacks by chance and finds a way out ---
             if ($useMind) {
@@ -735,6 +739,11 @@ class BotTick extends Command
                 $researchIdle = !$isResearchPlanet
                     || ((int) ($user['research_current_research'] ?? 0) === 0 && $researchId === null);
                 $idle = $buildingQueueEmpty && $buildingId === null && $researchIdle;
+                // bot:health measures idle per planet, and a council planet saving for its next purchase has a plan (24 Oct)
+                $result['planets']++;
+                if ($idle && $this->mindPlanetSaving) {
+                    $result['saving_idle']++;
+                }
 
                 $state = $this->ladder->recordTick((int) $planet['planet_id'], $idle, time(), $dryRun);
                 if ($idle && $dryRun) {
@@ -1409,6 +1418,7 @@ class BotTick extends Command
             'lab' => $isResearchPlanet && !$researchQueued && (int) ($user['research_current_research'] ?? 0) === 0,
             'yard' => $this->brain->parseHangarQueue((string) ($planet['planet_b_hangar_id'] ?? '')) === [],
         ]);
+        $this->mindPlanetSaving = str_contains((string) $plan['reason'], 'saving for');
         if ($dryRun || getenv('BOT_MIND_TRACE')) {
             $this->line("  [{$bot->id}] {$bot->name} mind {$p->label} {$where}: {$plan['reason']} | top: " . implode(', ', $this->mind->lastTop));
         }
@@ -1513,6 +1523,9 @@ class BotTick extends Command
     }
 
     private int $mindTrades = 0;
+
+    /** The council planet just planned is saving for something (bot:health does not count it as idle). */
+    private bool $mindPlanetSaving = false;
 
     /**
      * Phase 0 for mind bots: an attack is coming at this planet. The Guard advisor decides (noticed in

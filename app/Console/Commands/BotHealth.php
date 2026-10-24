@@ -56,6 +56,9 @@ class BotHealth extends Command
     /** Idle share: planets idle / bots processed averaged over a day above this. */
     private const IDLE_SHARE = 0.8;
 
+    /** Planets idle with nothing planned (not building, not researching, not saving) / planets, over a day. */
+    private const IDLE_PLANET_SHARE = 0.5;
+
     /** Rule 5: ticks to look back for spy activity (96 × 15 min = 24 h). */
     private const SPY_LOOKBACK_TICKS = 96;
 
@@ -182,7 +185,17 @@ class BotHealth extends Command
             $day = array_slice($lines, -self::TICKS_PER_DAY);
             $processed = array_sum(array_map(fn ($l) => (int) $l['processed'], $day));
             $idle = array_sum(array_map(fn ($l) => (int) ($l['idle_planets'] ?? 0), $day));
-            if ($processed > 0 && $idle / $processed > self::IDLE_SHARE) {
+            // Since 24 Oct the tick also logs planets= and saving_idle=: idle is then per PLANET (colonies made it
+            // look worse per bot) and a planet saving for its next purchase is not idle. Only when every line of the
+            // day's lines that have the new fields (at least an hour of them); otherwise the old per-bot measure.
+            $new = array_values(array_filter($day, fn ($l) => isset($l['planets'])));
+            $planets = array_sum(array_map(fn ($l) => (int) $l['planets'], $new));
+            $newIdle = array_sum(array_map(fn ($l) => (int) ($l['idle_planets'] ?? 0) - (int) ($l['saving_idle'] ?? 0), $new));
+            $perPlanet = count($new) >= 4 && $planets > 0;
+            if ($perPlanet && $newIdle / $planets > self::IDLE_PLANET_SHARE) {
+                return $this->verdict('idle-share', sprintf('%.0f%% of planets idle with nothing planned over the last 24 h', 100 * $newIdle / $planets), array_merge($recent, $detail));
+            }
+            if (!$perPlanet && $processed > 0 && $idle / $processed > self::IDLE_SHARE) {
                 return $this->verdict('idle-share', sprintf('%.0f%% of planets idle over the last 24 h', 100 * $idle / $processed), array_merge($recent, $detail));
             }
         }
