@@ -34,7 +34,40 @@ class HighscoreController extends BaseController
 
         $this->user = Users::getInstance()->getUserData();
         $this->planet = Users::getInstance()->getPlanetData();
+        self::refreshIfStale();
         $this->buildPage();
+    }
+
+    /** Opening the scoreboard rebuilds it when it is older than this (seconds). */
+    private const REFRESH_AFTER = 60;
+
+    /**
+     * The scoreboard is fresh when you look at it (Dale, 24 Oct 2026), on top of the bot tick's rebuild every
+     * 15 minutes. Since 9 Sep the rebuild (~2 s) ran only in the tick; before that ANY page load paid for it
+     * once a minute. Now only a scoreboard view does, at most once a minute, and never while the tick or
+     * another view holds the updates lock (then the page shows the last numbers).
+     */
+    public static function refreshIfStale(): bool
+    {
+        $settings = app(SettingsService::class);
+        if (time() - $settings->getInt('stat_last_update') < self::REFRESH_AFTER) {
+            return false;
+        }
+        if (!\Xgp\App\Libraries\MissionControlLib::acquireLock('xgp_updates')) {
+            return false;
+        }
+
+        try {
+            $settings->write('stat_last_update', (new \Xgp\App\Libraries\StatisticsLibrary())->makeStats()['stats_time']);
+
+            return true;
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('Highscore refresh failed: ' . $e->getMessage());
+
+            return false;
+        } finally {
+            \Xgp\App\Libraries\MissionControlLib::releaseLock('xgp_updates');
+        }
     }
 
     private function buildPage(): void
