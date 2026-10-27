@@ -81,8 +81,23 @@ class BotTick extends Command
      */
     private const UNWINNABLE_SKIP_SECONDS = 43200;
 
+    /**
+     * Human-owned planets: once ANY bot has probed one, no bot probes it again for this long (x5 terms:
+     * 6 h at x1). Shared intel above was meant to do this, but since Dale's 1 Oct rule only alliance
+     * members share and no bot is in an alliance, so every bot in range probed on its own timer -
+     * Oojerfink had 28 "Espionage action" messages on 27 Oct from 33 bots in range. Nothing is shared:
+     * the other bots just don't look. Table bot_human_probe.
+     */
+    private const HUMAN_PROBE_COOLDOWN_SECONDS = 4320;
+
     /** Probes avoided this tick by reusing another bot's scan of a human planet (tick line `shared=`). */
     private int $sharedIntelHits = 0;
+
+    /** Probes at human planets held back this tick by humanProbeBlock() (tick line `probe_held=`). */
+    private int $probesHeld = 0;
+
+    /** "g:s:p" => last time any bot probed that human planet, looked up once per tick. */
+    private array $humanProbeAt = [];
 
     /** user id => true for human players, looked up once per tick. */
     private array $humanIds = [];
@@ -363,11 +378,11 @@ class BotTick extends Command
     {
         try {
             $line = sprintf(
-                "%s | %sprocessed=%d skipped=%d built=%d ships=%d research=%d attacks=%d raids=%d spies=%d shared=%d saves=%d expeditions=%d harvests=%d moon_returns=%d colonise=%d feeds=%d build_rejected=%d errors=%d | idle_planets=%d escalated=%d stuck=%d reserved=%d planets=%d saving_idle=%d | %.1fs\n",
+                "%s | %sprocessed=%d skipped=%d built=%d ships=%d research=%d attacks=%d raids=%d spies=%d shared=%d probe_held=%d saves=%d expeditions=%d harvests=%d moon_returns=%d colonise=%d feeds=%d build_rejected=%d errors=%d | idle_planets=%d escalated=%d stuck=%d reserved=%d planets=%d saving_idle=%d | %.1fs\n",
                 date('Y-m-d H:i:s'),
                 $dryRun ? 'DRY ' : '',
                 $stats['processed'], $stats['skipped'], $stats['built'], $stats['ships'], $stats['researches'],
-                $stats['attacks'], $stats['raids'] ?? 0, $stats['spies'], $this->sharedIntelHits, $stats['fleet_saves'], $stats['expeditions'], $stats['harvests'] ?? 0, $stats['moon_returns'] ?? 0, $stats['colonise'] ?? 0, $stats['feeds'] ?? 0, $stats['build_rejected'] ?? 0, $stats['errors'],
+                $stats['attacks'], $stats['raids'] ?? 0, $stats['spies'], $this->sharedIntelHits, $this->probesHeld, $stats['fleet_saves'], $stats['expeditions'], $stats['harvests'] ?? 0, $stats['moon_returns'] ?? 0, $stats['colonise'] ?? 0, $stats['feeds'] ?? 0, $stats['build_rejected'] ?? 0, $stats['errors'],
                 $stats['idle_planets'] ?? 0, $stats['escalated'] ?? 0, $stats['stuck'] ?? 0, $stats['reserved'] ?? 0,
                 $stats['planets'] ?? 0, $stats['saving_idle'] ?? 0,
                 $elapsed
@@ -1018,14 +1033,27 @@ class BotTick extends Command
                         }
                     }
 
+                    // Fixes A + B (27 Oct): another bot probed this human planet recently, or no bot could
+                    // attack him now anyway (attack cap / lost to him 3 times) - don't spend a probe.
+                    $hold = $this->humanProbeBlock((int) $bot->id, $spyTarget);
+                    if ($hold !== null) {
+                        $this->probesHeld++;
+                        if ($dryRun) {
+                            $this->line("  [{$bot->id}] HOLD: {$key} no probe ({$hold})");
+                        }
+                        continue;
+                    }
+
                     if (!$dryRun) {
                         $fleetId = $this->dispatcher->sendSpy($planet, $user, $spyTarget, $probesPerSpy);
                         if ($fleetId) {
+                            $this->noteHumanProbe((int) $bot->id, $spyTarget, false);
                             $result['spied'] = true;
                             $result['spy_target'] = $key;
                             $spiedCount++;
                         }
                     } else {
+                        $this->noteHumanProbe((int) $bot->id, $spyTarget, true);
                         $result['spied'] = true;
                         $result['spy_target'] = $key;
                         $spiedCount++;
@@ -1208,17 +1236,26 @@ class BotTick extends Command
                 $shared = $this->isHumanPlayer((int) ($staleTarget['user_id'] ?? 0))
                     ? $this->borrowHumanIntel($bot->id, (int) $staleTarget['galaxy'], (int) $staleTarget['system'], (int) $staleTarget['planet'], (int) ($staleTarget['scanned_at'] ?? 0), $dryRun)
                     : 0;
+                $hold = $shared > 0 ? null : $this->humanProbeBlock((int) $bot->id, $staleTarget);
                 if ($shared > 0) {
                     $this->sharedIntelHits++;
                     if ($dryRun) {
                         $this->line("  [{$bot->id}] SHARE: {$coords} scanned " . intdiv(time() - $shared, 60) . "m ago by another bot — no refresh probe");
                     }
+                } elseif ($hold !== null) {
+                    // Fix A (27 Oct): the refresh probe obeys the same per-planet cooldown.
+                    $this->probesHeld++;
+                    if ($dryRun) {
+                        $this->line("  [{$bot->id}] HOLD: {$coords} no refresh probe ({$hold})");
+                    }
                 } elseif (!$dryRun) {
                     if ($this->dispatcher->sendSpy($planet, $user, $staleTarget, $probesPerSpy)) {
+                        $this->noteHumanProbe((int) $bot->id, $staleTarget, false);
                         $result['spied'] = true;
                         $result['spy_target'] = "{$coords} (refresh)";
                     }
                 } else {
+                    $this->noteHumanProbe((int) $bot->id, $staleTarget, true);
                     $result['spied'] = true;
                     $result['spy_target'] = "{$coords} (refresh)";
                 }
@@ -2819,6 +2856,78 @@ class BotTick extends Command
         }
 
         return $this->humanAttacks[$userId] >= self::HUMAN_ATTACK_CAP;
+    }
+
+    /**
+     * Why this bot must not probe this target now, or null to go ahead (27 Oct). Human-owned planets only:
+     * (A) any bot probed it inside HUMAN_PROBE_COOLDOWN_SECONDS; (B) the attack phase would drop it anyway -
+     * the player is at HUMAN_ATTACK_CAP, or this bot lost to him 3 times in 7 days. Before B, bots kept
+     * probing a capped player for attacks they were not allowed to send.
+     *
+     * @param  array<string, mixed>  $target  scanner/intel row (galaxy/system/planet/user_id)
+     */
+    private function humanProbeBlock(int $botId, array $target): ?string
+    {
+        $owner = (int) ($target['user_id'] ?? 0);
+        if (!$this->isHumanPlayer($owner)) {
+            return null;
+        }
+
+        $last = $this->lastHumanProbe((int) $target['galaxy'], (int) $target['system'], (int) $target['planet']);
+        if (time() - $last < BotSpeed::seconds(self::HUMAN_PROBE_COOLDOWN_SECONDS)) {
+            return 'probed ' . intdiv(time() - $last, 60) . 'm ago';
+        }
+        if ($this->humanAttackCapReached($owner)) {
+            return 'attack cap reached';
+        }
+        $losses = DB::table('bot_combat_log')
+            ->where('attacker_id', $botId)
+            ->where('defender_id', $owner)
+            ->where('result', 'loss')
+            ->where('created_at', '>', now()->subDays(7))
+            ->count();
+        if ($losses >= 3) {
+            return "lost {$losses}x in 7d";
+        }
+
+        return null;
+    }
+
+    /**
+     * Last time any bot probed this planet: the bot_human_probe stamp, or the newest bot_intel scan of it
+     * (covers probes sent before the table existed). Cached for the tick; noteHumanProbe() updates it.
+     */
+    private function lastHumanProbe(int $galaxy, int $system, int $planet): int
+    {
+        $key = "{$galaxy}:{$system}:{$planet}";
+        if (!array_key_exists($key, $this->humanProbeAt)) {
+            $where = ['galaxy' => $galaxy, 'system' => $system, 'planet' => $planet];
+            $this->humanProbeAt[$key] = max(
+                (int) DB::table('bot_human_probe')->where($where)->value('probed_at'),
+                (int) DB::table('bot_intel')->where($where)->max('scanned_at')
+            );
+        }
+
+        return $this->humanProbeAt[$key];
+    }
+
+    /**
+     * A probe just left for this planet: start its cooldown (fix A). Bot targets are ignored. A dry run only
+     * updates the tick cache, so the preview still shows the second bot being held.
+     *
+     * @param  array<string, mixed>  $target
+     */
+    private function noteHumanProbe(int $botId, array $target, bool $dryRun): void
+    {
+        if (!$this->isHumanPlayer((int) ($target['user_id'] ?? 0))) {
+            return;
+        }
+        $where = ['galaxy' => (int) $target['galaxy'], 'system' => (int) $target['system'], 'planet' => (int) $target['planet']];
+        $this->humanProbeAt["{$where['galaxy']}:{$where['system']}:{$where['planet']}"] = time();
+        if ($dryRun) {
+            return;
+        }
+        DB::table('bot_human_probe')->updateOrInsert($where, ['probed_at' => time(), 'bot_user_id' => $botId]);
     }
 
     /** A bot attack on this player just left: count it against the cap for the rest of the tick. */
