@@ -96,6 +96,12 @@ class BotTick extends Command
     /** Probes at human planets held back this tick by humanProbeBlock() (tick line `probe_held=`). */
     private int $probesHeld = 0;
 
+    /** Human-planet attack candidates dropped this tick because the report was spent (tick line `spent=`). */
+    private int $reportsSpent = 0;
+
+    /** "g:s:p" => last bot attack on that human planet (dispatch, landing, or now if one is flying), per tick. */
+    private array $humanAttackAt = [];
+
     /** "g:s:p" => last time any bot probed that human planet, looked up once per tick. */
     private array $humanProbeAt = [];
 
@@ -378,11 +384,11 @@ class BotTick extends Command
     {
         try {
             $line = sprintf(
-                "%s | %sprocessed=%d skipped=%d built=%d ships=%d research=%d attacks=%d raids=%d spies=%d shared=%d probe_held=%d saves=%d expeditions=%d harvests=%d moon_returns=%d colonise=%d feeds=%d build_rejected=%d errors=%d | idle_planets=%d escalated=%d stuck=%d reserved=%d planets=%d saving_idle=%d | %.1fs\n",
+                "%s | %sprocessed=%d skipped=%d built=%d ships=%d research=%d attacks=%d raids=%d spies=%d shared=%d probe_held=%d spent=%d saves=%d expeditions=%d harvests=%d moon_returns=%d colonise=%d feeds=%d build_rejected=%d errors=%d | idle_planets=%d escalated=%d stuck=%d reserved=%d planets=%d saving_idle=%d | %.1fs\n",
                 date('Y-m-d H:i:s'),
                 $dryRun ? 'DRY ' : '',
                 $stats['processed'], $stats['skipped'], $stats['built'], $stats['ships'], $stats['researches'],
-                $stats['attacks'], $stats['raids'] ?? 0, $stats['spies'], $this->sharedIntelHits, $this->probesHeld, $stats['fleet_saves'], $stats['expeditions'], $stats['harvests'] ?? 0, $stats['moon_returns'] ?? 0, $stats['colonise'] ?? 0, $stats['feeds'] ?? 0, $stats['build_rejected'] ?? 0, $stats['errors'],
+                $stats['attacks'], $stats['raids'] ?? 0, $stats['spies'], $this->sharedIntelHits, $this->probesHeld, $this->reportsSpent, $stats['fleet_saves'], $stats['expeditions'], $stats['harvests'] ?? 0, $stats['moon_returns'] ?? 0, $stats['colonise'] ?? 0, $stats['feeds'] ?? 0, $stats['build_rejected'] ?? 0, $stats['errors'],
                 $stats['idle_planets'] ?? 0, $stats['escalated'] ?? 0, $stats['stuck'] ?? 0, $stats['reserved'] ?? 0,
                 $stats['planets'] ?? 0, $stats['saving_idle'] ?? 0,
                 $elapsed
@@ -1146,6 +1152,18 @@ class BotTick extends Command
                         continue;
                     }
 
+                    // Fix A (29 Oct): a spy report of a human planet is good for one attack. Once any bot has
+                    // attacked the planet, older reports show resources that are gone - LunarWolf hit
+                    // Oojerfink's Cushion Alpha 8 times in 26 h on one 59.5K report while the loot fell to
+                    // 4.8K. Skipped, not refreshed here: the spy phase re-probes under the 6 h human cooldown.
+                    if ($this->humanReportSpent($defenderId, $intelTarget)) {
+                        $this->reportsSpent++;
+                        if ($dryRun) {
+                            $this->line("  [{$bot->id}] SPENT: {$intelTarget['galaxy']}:{$intelTarget['system']}:{$intelTarget['planet']} attacked since this report - needs a new probe");
+                        }
+                        continue;
+                    }
+
                     if ($defenderId > 0) {
                         $defStats = DB::selectOne("SELECT user_statistic_total_points FROM `{$prefix}users_statistics` WHERE `user_statistic_user_id` = ?", [$defenderId]);
                         $defPoints = (int) ($defStats->user_statistic_total_points ?? 0);
@@ -1218,6 +1236,7 @@ class BotTick extends Command
                         $fleetId = $this->dispatcher->sendAttack($planet, $user, $attackTarget, $attackFleet);
                         if ($fleetId) {
                             $this->noteHumanAttack((int) ($attackTarget['user_id'] ?? 0));
+                            $this->noteHumanPlanetAttacked((int) $bot->id, $attackTarget, false);
                             $result['attacked'] = true;
                             $result['attack_target'] = $coords;
                             $this->chat->sendAttackWinMessage($user, (int) ($attackTarget['user_id'] ?? 0), $personality);
@@ -1226,6 +1245,7 @@ class BotTick extends Command
                         \Illuminate\Support\Facades\Log::error("BotTick: attack dispatch crashed for {$bot->name}: " . $e->getMessage());
                     }
                 } else {
+                    $this->noteHumanPlanetAttacked((int) $bot->id, $attackTarget, true);
                     $result['attacked'] = true;
                     $result['attack_target'] = $coords;
                 }
@@ -1931,6 +1951,7 @@ class BotTick extends Command
                     break; // short of fuel or ships
                 }
                 $this->noteHumanAttack((int) $target['user_id']);
+                $this->noteHumanPlanetAttacked((int) $bot->id, $target, false);
                 DB::table('bot_target_skip')->updateOrInsert(
                     ['bot_user_id' => (int) $bot->id, 'galaxy' => $target['galaxy'], 'system' => $target['system'], 'planet' => $target['planet']],
                     ['until' => time() + BotSpeed::seconds(self::RAID_COOLDOWN_SECONDS), 'set_at' => time(), 'reason' => 'raided']
@@ -2928,6 +2949,79 @@ class BotTick extends Command
             return;
         }
         DB::table('bot_human_probe')->updateOrInsert($where, ['probed_at' => time(), 'bot_user_id' => $botId]);
+    }
+
+    /**
+     * Is this report of a human-owned planet already used up (29 Oct)? True when any bot attacked the planet at
+     * or after the scan: one report, one attack. Bot targets: always false.
+     *
+     * @param  array<string, mixed>  $intel  intel row (galaxy/system/planet/scanned_at)
+     */
+    private function humanReportSpent(int $ownerId, array $intel): bool
+    {
+        if (!$this->isHumanPlayer($ownerId)) {
+            return false;
+        }
+
+        return $this->lastHumanPlanetAttack($ownerId, (int) $intel['galaxy'], (int) $intel['system'], (int) $intel['planet'])
+            >= (int) ($intel['scanned_at'] ?? 0);
+    }
+
+    /**
+     * Last bot attack on this human planet: the bot_human_attack stamp (set at dispatch), the newest bot battle
+     * there in bot_combat_log (attacks from before the table existed), or now while a bot attack is still
+     * flying to it. Cached for the tick; noteHumanPlanetAttacked() updates it.
+     */
+    private function lastHumanPlanetAttack(int $ownerId, int $galaxy, int $system, int $planet): int
+    {
+        $key = "{$galaxy}:{$system}:{$planet}";
+        if (!array_key_exists($key, $this->humanAttackAt)) {
+            $flying = DB::table('fleets as f')
+                ->join('users as u', 'u.id', '=', 'f.fleet_owner')
+                ->whereNotNull('u.bot_profile')
+                ->where('f.fleet_end_galaxy', $galaxy)
+                ->where('f.fleet_end_system', $system)
+                ->where('f.fleet_end_planet', $planet)
+                ->where('f.fleet_mission', Missions::ATTACK)
+                ->where('f.fleet_mess', 0)
+                ->exists();
+            if ($flying) {
+                $this->humanAttackAt[$key] = time();
+            } else {
+                $stamp = (int) DB::table('bot_human_attack')
+                    ->where(['galaxy' => $galaxy, 'system' => $system, 'planet' => $planet])
+                    ->value('attacked_at');
+                $landed = DB::table('bot_combat_log as c')
+                    ->join('users as u', 'u.id', '=', 'c.attacker_id')
+                    ->whereNotNull('u.bot_profile')
+                    ->where('c.defender_id', $ownerId)
+                    ->where('c.target_coords', $key)
+                    ->selectRaw('MAX(UNIX_TIMESTAMP(c.created_at)) AS t')
+                    ->value('t');
+                $this->humanAttackAt[$key] = max($stamp, (int) $landed);
+            }
+        }
+
+        return $this->humanAttackAt[$key];
+    }
+
+    /**
+     * A bot attack (spy/sim attack or cargo raid) just left for this planet: every report of it scanned up to
+     * now is spent. Bot targets are ignored. A dry run only updates the tick cache.
+     *
+     * @param  array<string, mixed>  $target  galaxy/system/planet/user_id
+     */
+    private function noteHumanPlanetAttacked(int $botId, array $target, bool $dryRun): void
+    {
+        if (!$this->isHumanPlayer((int) ($target['user_id'] ?? 0))) {
+            return;
+        }
+        $where = ['galaxy' => (int) $target['galaxy'], 'system' => (int) $target['system'], 'planet' => (int) $target['planet']];
+        $this->humanAttackAt["{$where['galaxy']}:{$where['system']}:{$where['planet']}"] = time();
+        if ($dryRun) {
+            return;
+        }
+        DB::table('bot_human_attack')->updateOrInsert($where, ['attacked_at' => time(), 'bot_user_id' => $botId]);
     }
 
     /** A bot attack on this player just left: count it against the cap for the rest of the tick. */
