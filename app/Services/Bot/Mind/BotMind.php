@@ -185,7 +185,9 @@ final class BotMind
         if ($isMain) {
             $key = $saving !== null ? "{$saving['lane']}:{$saving['id']}" : null;
             $prev = $s->memory['saving'] ?? null;
-            $s->memory['saving'] = $key === null ? null : [$key, ($prev !== null && $prev[0] === $key) ? $prev[1] + 1 : 1];
+            $same = $prev !== null && $prev[0] === $key;
+            // [key, ticks, since]: the doctor measures saving in x1 hours against the bot's patience, not in ticks
+            $s->memory['saving'] = $key === null ? null : [$key, $same ? $prev[1] + 1 : 1, $same ? (int) ($prev[2] ?? time()) : time()];
         }
         $out['reason'] = implode('; ', $reasons);
         $this->lastReason = $out['reason'];

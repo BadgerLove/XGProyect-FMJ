@@ -53,19 +53,22 @@ final class EconomyAdvisor implements Advisor
             $need = $k->energy($id, $level + 1, $planet, $s->user) - $k->energy($id, $level, $planet, $s->user);
             $surplus = (float) ($planet['planet_energy_max'] ?? 0) + (float) ($planet['planet_energy_used'] ?? 0);
             if ($surplus < $need) {
-                $power = $k->bestPower($s, $planet);
+                $power = $k->bestPower($s, $planet, $need - $surplus);
                 if ($power === null) {
                     continue;
                 }
                 $mine['chain'] = $k->add($mine['chain'], $power['chain']);
-                $mine = array_merge($mine, ['lane' => $power['lane'], 'id' => $power['id'], 'level' => $power['level'], 'cost' => $power['cost'], 'unit_cost' => $power['cost']]);
+                // the power step may be a unit order (satellites): carry its count and unit price
+                $mine = array_merge($mine, ['lane' => $power['lane'], 'id' => $power['id'], 'level' => $power['level'], 'cost' => $power['cost'],
+                    'count' => $power['count'] ?? 1, 'unit_cost' => $power['unit_cost'] ?? $power['cost']]);
             }
             $out[] = Kit::proposal($mine, 'economy', "{$res} mine " . ($level + 1), $value);
         }
 
         // running below 100 %: the power plant that gives production back
         $now = $k->productionPercent($planet);
-        if ($now < 100 && ($power = $k->bestPower($s, $planet)) !== null) {
+        $deficit = -((float) ($planet['planet_energy_max'] ?? 0) + (float) ($planet['planet_energy_used'] ?? 0));
+        if ($now < 100 && ($power = $k->bestPower($s, $planet, max(0.0, $deficit))) !== null) {
             $after = $k->production->maxProductionPercentage((int) ((float) $planet['planet_energy_max'] + $power['energy']), (int) $planet['planet_energy_used']);
             $value = 0.0;
             foreach (Situation::RES as $r) {

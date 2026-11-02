@@ -211,6 +211,10 @@ class BotTick extends Command
         }
         // Cleanup expired grudges
         $this->grudge->cleanup();
+        // Cleanup expired target skips (11,621 dead rows and 22 live ones on 2 Nov 2026; nothing purged them)
+        if (!$dryRun) {
+            DB::table('bot_target_skip')->where('until', '<', time())->delete();
+        }
 
         $bots = User::where('email', 'LIKE', '%@bots.local')
             ->where('authlevel', '!=', 3)
@@ -384,11 +388,11 @@ class BotTick extends Command
     {
         try {
             $line = sprintf(
-                "%s | %sprocessed=%d skipped=%d built=%d ships=%d research=%d attacks=%d raids=%d spies=%d shared=%d probe_held=%d spent=%d saves=%d expeditions=%d harvests=%d moon_returns=%d colonise=%d feeds=%d build_rejected=%d errors=%d | idle_planets=%d escalated=%d stuck=%d reserved=%d planets=%d saving_idle=%d | %.1fs\n",
+                "%s | %sprocessed=%d skipped=%d built=%d ships=%d research=%d attacks=%d raids=%d spies=%d shared=%d probe_held=%d spent=%d saves=%d expeditions=%d harvests=%d moon_returns=%d colonise=%d feeds=%d trades=%d build_rejected=%d errors=%d | idle_planets=%d escalated=%d stuck=%d reserved=%d planets=%d saving_idle=%d | %.1fs\n",
                 date('Y-m-d H:i:s'),
                 $dryRun ? 'DRY ' : '',
                 $stats['processed'], $stats['skipped'], $stats['built'], $stats['ships'], $stats['researches'],
-                $stats['attacks'], $stats['raids'] ?? 0, $stats['spies'], $this->sharedIntelHits, $this->probesHeld, $this->reportsSpent, $stats['fleet_saves'], $stats['expeditions'], $stats['harvests'] ?? 0, $stats['moon_returns'] ?? 0, $stats['colonise'] ?? 0, $stats['feeds'] ?? 0, $stats['build_rejected'] ?? 0, $stats['errors'],
+                $stats['attacks'], $stats['raids'] ?? 0, $stats['spies'], $this->sharedIntelHits, $this->probesHeld, $this->reportsSpent, $stats['fleet_saves'], $stats['expeditions'], $stats['harvests'] ?? 0, $stats['moon_returns'] ?? 0, $stats['colonise'] ?? 0, $stats['feeds'] ?? 0, $this->mindTrades, $stats['build_rejected'] ?? 0, $stats['errors'],
                 $stats['idle_planets'] ?? 0, $stats['escalated'] ?? 0, $stats['stuck'] ?? 0, $stats['reserved'] ?? 0,
                 $stats['planets'] ?? 0, $stats['saving_idle'] ?? 0,
                 $elapsed
@@ -833,9 +837,16 @@ class BotTick extends Command
                     (int) ($planet['planet_type'] ?? 1), [Missions::RECYCLE]
                 )
             ) {
-                $debrisTarget = $this->harvester->findOwnDebris($planet)
-                    ?? $this->harvester->findHarvestTarget($planet, $bot->id)
-                    ?? ($useMind ? $this->visibleDebris($situation, $planet) : null);
+                // only the part of a field nobody is already flying to (2 Nov 2026: 52 % of trips came home empty)
+                $debrisTarget = $this->harvester->lessInFlight($this->harvester->findOwnDebris($planet))
+                    ?? $this->harvester->lessInFlight($this->harvester->findHarvestTarget($planet, $bot->id));
+                for ($look = 0; $useMind && $debrisTarget === null && $look < 4; $look++) {
+                    $seen = $this->visibleDebris($situation, $planet);
+                    if ($seen === null) {
+                        break;
+                    }
+                    $debrisTarget = $this->harvester->lessInFlight($seen);
+                }
 
                 if ($debrisTarget !== null) {
                     $needed = $this->harvester->calcRecyclersNeeded($debrisTarget);
@@ -855,6 +866,7 @@ class BotTick extends Command
                                         $debrisTarget['galaxy'], $debrisTarget['system'], $debrisTarget['planet'], $bot->id
                                     );
                                 }
+                                $this->harvester->claim($debrisTarget, $toSend);
                                 $planet['ship_recycler'] = $available - $toSend;
                                 $result['harvests']++;
                                 $this->line("  [{$bot->id}] {$bot->name}: harvesting {$what} at {$where} ({$toSend} recyclers)");

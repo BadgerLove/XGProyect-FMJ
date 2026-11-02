@@ -26,6 +26,13 @@ final class Kit
     public const STORE = ['metal' => 22, 'crystal' => 23, 'deuterium' => 24];
     public const LAB = 31;
     public const TERRAFORMER = 33;
+    public const SATELLITE = 212;
+
+    /** Satellites may supply at most this share of a planet's energy (raids shoot them). */
+    private const SATELLITE_SHARE = 0.3;
+
+    /** Most satellites in one order. */
+    private const SATELLITE_MAX_ORDER = 20;
 
     /** @var array<int, string> */
     public array $col = [];
@@ -161,14 +168,35 @@ final class Kit
     }
 
     /**
-     * Solar Plant or (when allowed) Fusion: whichever buys energy cheaper, fusion's deuterium burn included.
+     * Solar Plant, (when allowed) Fusion, or solar satellites: whichever buys energy cheaper, fusion's deuterium
+     * burn included. Satellites (2 Nov 2026) are what a player buys when the next plant level is the expensive
+     * step: ~180 bots were saving for Solar Plant 14-17 to unlock a mine and not one satellite existed. They are
+     * dearer for a bot that is being raided (they get shot) and never more than SATELLITE_SHARE of the energy.
      *
+     * @param  float  $need  energy wanted (sizes the satellite order; 0 = one plant level's worth)
      * @return array<string, mixed>|null resolved step + 'energy'
      */
-    public function bestPower(Situation $s, array $planet): ?array
+    public function bestPower(Situation $s, array $planet, float $need = 0.0): ?array
     {
         $best = null;
         $bestPerEnergy = PHP_FLOAT_MAX;
+        $temp = (float) ($planet['planet_temp_max'] ?? 0);
+        $tech = (int) ($s->user['research_energy_technology'] ?? 0);
+        if ($this->allowed(self::SATELLITE, $planet, $s->user)) {
+            $perSat = $this->registry->get(self::SATELLITE)->getProduction()->calculateEnergy(1, 10, $temp, $tech);
+            $have = (int) ($planet['ship_solar_satellite'] ?? 0);
+            $max = (float) ($planet['planet_energy_max'] ?? 0);
+            $room = self::SATELLITE_SHARE * ($max + max(0.0, $need)) - $have * $perSat;
+            if ($perSat > 0 && $room >= $perSat) {
+                $n = max(1, min(self::SATELLITE_MAX_ORDER, (int) floor($room / $perSat), $need > 0 ? (int) ceil($need / $perSat) : (int) ceil(0.1 * max($max, 100.0) / $perSat)));
+                if (($c = $this->resolveUnit($s, $planet, self::SATELLITE, $n)) !== null) {
+                    $energy = $c['lane'] === 's' ? $n * $perSat : $perSat; // a prerequisite step first: value it as one satellite
+                    $worth = $s->worthOf($c['chain']) * (1.0 + 2.0 * $s->threat);
+                    $bestPerEnergy = $worth / $energy;
+                    $best = $c + ['energy' => $energy];
+                }
+            }
+        }
         foreach ([self::SOLAR, self::FUSION] as $id) {
             if ($id === self::FUSION && !$this->allowed($id, $planet, $s->user)) {
                 continue;
@@ -179,8 +207,6 @@ final class Kit
                 continue;
             }
             $f = $this->registry->get($id)->getProduction();
-            $temp = (float) ($planet['planet_temp_max'] ?? 0);
-            $tech = (int) ($s->user['research_energy_technology'] ?? 0);
             $gain = $f->calculateEnergy($level + 1, 10, $temp, $tech) - $f->calculateEnergy($level, 10, $temp, $tech);
             if ($gain <= 0) {
                 continue;

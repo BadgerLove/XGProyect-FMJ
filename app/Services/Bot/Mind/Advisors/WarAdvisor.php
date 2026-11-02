@@ -40,7 +40,13 @@ final class WarAdvisor implements Advisor
             return [];
         }
         $income = $s->incomeWorth();
-        $value = 0.8 * $s->attackIncome + 0.3 * $s->lossRate * $p->guard + 0.04 * $p->war * $income;
+        // a fleet that keeps dying at home and earns nothing is a bill, not an income: the standing ambition and the
+        // "it protects us" share fade (2 Nov 2026: the bottom tenth bought one light fighter at a time, lost it in the
+        // next raid, and never grew). Not zero - a weak bot with a few ships is still a farm for small players.
+        $windowHours = max(0.001, $s->windowSeconds / 3600.0);
+        $earned = ($s->attackIncome + $s->raidIncome) * $windowHours;
+        $fade = $s->hits > 0 && $s->lostWorth > $earned + 0.25 * $income * $windowHours ? 0.25 : 1.0;
+        $value = 0.8 * $s->attackIncome + $fade * (0.3 * $s->lossRate * $p->guard + 0.04 * $p->war * $income);
         // a fleet that has been losing its attacks earns less than the reports say: trust a bad record
         if ($s->raidsSent >= 4 && $s->raidWins / $s->raidsSent < 0.4) {
             $value *= 0.5;

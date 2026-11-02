@@ -30,6 +30,70 @@ class HarvestService
     /** Live debris looked up this tick: "g:s:p" => [metal, crystal]. */
     private array $liveCache = [];
 
+    /** Recycler capacity already on its way to each field this tick (recycle fleets not yet turned round): "g:s:p" => units. */
+    private ?array $inFlight = null;
+
+    /**
+     * Recycler capacity other fleets are already bringing to this field: every recycle mission (8) that has not
+     * collected yet (fleet_mess 0: flying there, or landed and waiting for the fleet processor), plus the trips
+     * sent earlier this tick (claim()). On 2 Nov 2026 741 recycle fleets were flying to 190 fields, 429 of them to
+     * a field already empty, and 52 % of all recycle trips since 22 Oct came home with nothing: every finder sized
+     * its trip from the live field and nobody looked at who was already on the way.
+     */
+    public function inFlightCapacity(int $galaxy, int $system, int $planet): int
+    {
+        if ($this->inFlight === null) {
+            $this->inFlight = [];
+            $rows = DB::table('fleets')
+                ->where('fleet_mission', 8)
+                ->where('fleet_mess', 0)
+                ->where('fleet_end_type', 1)
+                ->get(['fleet_end_galaxy', 'fleet_end_system', 'fleet_end_planet', 'fleet_array']);
+            foreach ($rows as $f) {
+                $ships = @unserialize((string) $f->fleet_array, ['allowed_classes' => false]);
+                $n = is_array($ships) ? (int) ($ships[209] ?? 0) : 0;
+                $key = "{$f->fleet_end_galaxy}:{$f->fleet_end_system}:{$f->fleet_end_planet}";
+                $this->inFlight[$key] = ($this->inFlight[$key] ?? 0) + $n * self::RECYCLER_CAPACITY;
+            }
+        }
+
+        return $this->inFlight["{$galaxy}:{$system}:{$planet}"] ?? 0;
+    }
+
+    /**
+     * The part of a field nobody is already flying to collect, or null when what is left is not worth a trip.
+     *
+     * @param  array{galaxy: int, system: int, planet: int, debris_metal: int, debris_crystal: int}|null  $target
+     */
+    public function lessInFlight(?array $target): ?array
+    {
+        if ($target === null) {
+            return null;
+        }
+        $claimed = $this->inFlightCapacity((int) $target['galaxy'], (int) $target['system'], (int) $target['planet']);
+        if ($claimed <= 0) {
+            return $target;
+        }
+        $total = (int) $target['debris_metal'] + (int) $target['debris_crystal'];
+        $left = $total - $claimed;
+        if ($left < BotSpeed::amount(self::MIN_DEBRIS_VALUE)) {
+            return null;
+        }
+        $share = $left / max(1, $total);
+        $target['debris_metal'] = (int) floor((int) $target['debris_metal'] * $share);
+        $target['debris_crystal'] = (int) floor((int) $target['debris_crystal'] * $share);
+
+        return $target;
+    }
+
+    /** A trip was just sent: later bots in this tick see that much of the field as spoken for. */
+    public function claim(array $target, int $recyclers): void
+    {
+        $this->inFlightCapacity((int) $target['galaxy'], (int) $target['system'], (int) $target['planet']);
+        $key = "{$target['galaxy']}:{$target['system']}:{$target['planet']}";
+        $this->inFlight[$key] = ($this->inFlight[$key] ?? 0) + $recyclers * self::RECYCLER_CAPACITY;
+    }
+
     /**
      * The debris field at the bot's own planet, if worth collecting.
      * No knowledge or distance needed — it is on the doorstep.
