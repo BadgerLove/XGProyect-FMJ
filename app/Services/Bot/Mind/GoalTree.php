@@ -36,17 +36,38 @@ final class GoalTree
             ['b', 1, 18, 'greed'], ['b', 2, 15, 'greed'], ['b', 3, 13, 'greed'], ['r', 117, 4, 'war'], ['r', 121, 2, 'war'],
             ['u', 206, 10, 'war'], ['r', 124, 5, 'expand'], ['colonies', 3, 'expand'], ['r', 109, 4, 'war'], ['r', 110, 4, 'guard'],
             ['r', 111, 4, 'war'], ['b', 21, 7, 'war'], ['b', 12, 1, 'science'], ['u', 402, 20, 'guard'],
+            // Lab 7 opens Hyperspace Tech (Lab 7, Energy 5, Shielding 5), and HT 3 is half the road to battleships:
+            // without these 815 of 1,000 mains sat at Lab 6 with 0 battleships (review 6 Nov, Dale 8 Nov)
+            ['b', 31, 7, 'science'], ['r', 114, 3, 'science'],
         ]],
         4 => ['name' => 'late', 'goals' => [
             ['r', 118, 4, 'war'], ['u', 207, 10, 'war'], ['r', 124, 7, 'expand'], ['colonies', 4, 'expand'], ['b', 15, 1, 'greed'],
             ['r', 122, 4, 'science'], ['b', 1, 24, 'greed'], ['b', 2, 20, 'greed'], ['b', 3, 18, 'greed'], ['u', 405, 10, 'guard'],
-            ['r', 108, 8, 'raid'],
+            ['r', 108, 8, 'raid'], ['b', 31, 8, 'science'],
         ]],
         5 => ['name' => 'end', 'goals' => [
             ['r', 114, 8, 'science'], ['u', 213, 10, 'war'], ['r', 124, 11, 'expand'], ['colonies', 6, 'expand'], ['b', 33, 3, 'greed'],
-            ['u', 215, 10, 'war'], ['r', 122, 8, 'science'], // Graviton/Deathstar need energy, not resources: later
+            ['u', 215, 10, 'war'], ['r', 122, 8, 'science'], ['b', 31, 10, 'science'], // Graviton/Deathstar need energy, not resources: later
         ]],
     ];
+
+    /** Highest level of building/research $id asked for by the stages up to and including $stage (0 = none). */
+    public static function milestoneLevel(int $id, int $stage): int
+    {
+        $best = 0;
+        foreach (self::STAGES as $i => $st) {
+            if ($i > $stage) {
+                break;
+            }
+            foreach ($st['goals'] as $g) {
+                if (($g[0] === 'r' || $g[0] === 'b') && (int) $g[1] === $id) {
+                    $best = max($best, (int) $g[2]);
+                }
+            }
+        }
+
+        return $best;
+    }
 
     /** Value of a milestone, as a share of the bot's whole income per hour (rises with the stage). */
     private const WEIGHT = 0.03;
