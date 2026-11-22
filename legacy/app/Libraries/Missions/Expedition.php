@@ -11,6 +11,7 @@ use App\Services\FormatService;
 use App\Services\Game\Formulas\ExpeditionService;
 use App\Services\Game\Formulas\ExpeditionSlotService;
 use App\Services\Game\Formulas\FleetsService;
+use Xgp\App\Core\Enumerators\PlanetTypesEnumerator;
 use Xgp\App\Libraries\FleetsLib;
 use Xgp\App\Libraries\Functions;
 
@@ -53,10 +54,9 @@ class Expedition extends Missions
             $fleetShips = \Xgp\App\Libraries\FleetsLib::getFleetShipsArray($fleet['fleet_array']);
             if (isset($fleetShips[210]) && $fleetShips[210] > 0) {
                 $this->expeditionMessage(
-                    (int) $fleet['fleet_owner'],
+                    $fleet,
                     sprintf(__('game/expedition.exp_space_report'), $expGalaxy, $expSystem, $slots->usedPercent($expGalaxy, $expSystem, (int) $fleet['fleet_start_time'])),
-                    (int) $fleet['fleet_end_stay'],
-                    ['galaxy' => $expGalaxy, 'system' => $expSystem, 'planet' => $fleet['fleet_end_planet']]
+                    (int) $fleet['fleet_end_stay']
                 );
             }
 
@@ -105,6 +105,8 @@ class Expedition extends Missions
                     break;
             }
         } elseif (parent::canCompleteMission($fleet)) {
+            // Dated fleet_end_time (when it lands), like Transport/Deploy/Recycle. It used fleet_end_stay, so the
+            // one message naming the home planet was filed back among older messages (Dale, 22 Nov 2026).
             $fleetUsedStorage = $fleet['fleet_resource_metal'] + $fleet['fleet_resource_crystal'] + $fleet['fleet_resource_deuterium'];
 
             if ($fleetUsedStorage === 0) {
@@ -117,14 +119,9 @@ class Expedition extends Missions
                 );
 
                 $this->expeditionMessage(
-                    (int) $fleet['fleet_owner'],
+                    $fleet,
                     $message,
-                    (int) $fleet['fleet_end_stay'],
-                    [
-                        'galaxy' => $fleet['fleet_end_galaxy'],
-                        'system' => $fleet['fleet_end_system'],
-                        'planet' => $fleet['fleet_end_planet'],
-                    ]
+                    (int) $fleet['fleet_end_time']
                 );
             } else {
                 $message = sprintf(
@@ -139,14 +136,9 @@ class Expedition extends Missions
                 );
 
                 $this->expeditionMessage(
-                    (int) $fleet['fleet_owner'],
+                    $fleet,
                     $message,
-                    (int) $fleet['fleet_end_stay'],
-                    [
-                        'galaxy' => $fleet['fleet_end_galaxy'],
-                        'system' => $fleet['fleet_end_system'],
-                        'planet' => $fleet['fleet_end_planet'],
-                    ]
+                    (int) $fleet['fleet_end_time']
                 );
             }
 
@@ -230,18 +222,13 @@ class Expedition extends Missions
 
         $message = sprintf(
             __('game/expedition.exp_dm_' . mt_rand(1, 5)),
-            $this->formatService->prettyNumber($darkMatterFound)
+            $this->resourceAmount('darkmatter', $darkMatterFound)
         );
 
         $this->expeditionMessage(
-            (int) $fleet['fleet_owner'],
+            $fleet,
             $message,
-            (int) $fleet['fleet_end_stay'],
-            [
-                'galaxy' => $fleet['fleet_end_galaxy'],
-                'system' => $fleet['fleet_end_system'],
-                'planet' => $fleet['fleet_end_planet'],
-            ]
+            (int) $fleet['fleet_end_stay']
         );
 
         $this->updateDarkMatter((int) $fleet['fleet_owner'], $darkMatterFound);
@@ -348,14 +335,9 @@ class Expedition extends Missions
         );
 
         $this->expeditionMessage(
-            (int) $fleet['fleet_owner'],
+            $fleet,
             $message,
-            (int) $fleet['fleet_end_stay'],
-            [
-                'galaxy' => $fleet['fleet_end_galaxy'],
-                'system' => $fleet['fleet_end_system'],
-                'planet' => $fleet['fleet_end_planet'],
-            ]
+            (int) $fleet['fleet_end_stay']
         );
     }
 
@@ -363,7 +345,7 @@ class Expedition extends Missions
     {
         // fleet capacity
         $fleetUsedStorage = $fleet['fleet_resource_metal'] + $fleet['fleet_resource_crystal'] + $fleet['fleet_resource_deuterium'];
-        $fleetMaxCapacity = $this->fleetCapacity - $fleetUsedStorage;
+        $fleetMaxCapacity = max(0, $this->fleetCapacity - $fleetUsedStorage);
 
         // New: fleet-value-based resource calculation
         $typeObtained = $this->expeditionService->calculateResourceTypeObtained();
@@ -383,11 +365,9 @@ class Expedition extends Missions
         $durationMultiplier = $this->getDurationMultiplier($stayDuration);
         $foundAmount = (int) ($foundAmount * $durationMultiplier);
 
-        if ($foundAmount > $fleetMaxCapacity) {
-            $fillFleetStorage = $fleetMaxCapacity;
-        } else {
-            $fillFleetStorage = $foundAmount;
-        }
+        // Holds full: the rest stays behind, and the message now says so (Dale, 22 Nov 2026)
+        $holdsFull = $foundAmount > $fleetMaxCapacity;
+        $fillFleetStorage = $holdsFull ? $fleetMaxCapacity : $foundAmount;
 
         $this->updateFleetResourcesById(
             (int) $fleet['fleet_id'],
@@ -395,21 +375,20 @@ class Expedition extends Missions
             $fillFleetStorage
         );
 
+        // "11.8 million Crystal collected." It printed the missing key game/resources.crystal (Dale, 22 Nov 2026)
         $message = sprintf(
             __('game/expedition.exp_new_resources_' . mt_rand(1, 4)),
-            $this->formatService->prettyNumber($fillFleetStorage),
-            __('game/resources.' . strtolower($typeObtained))
+            $this->resourceAmount($typeObtained, (int) $fillFleetStorage)
         );
 
+        if ($holdsFull) {
+            $message .= '<br>' . __('game/expedition.exp_holds_full');
+        }
+
         $this->expeditionMessage(
-            (int) $fleet['fleet_owner'],
+            $fleet,
             $message,
-            (int) $fleet['fleet_end_stay'],
-            [
-                'galaxy' => $fleet['fleet_end_galaxy'],
-                'system' => $fleet['fleet_end_system'],
-                'planet' => $fleet['fleet_end_planet'],
-            ]
+            (int) $fleet['fleet_end_stay']
         );
 
         parent::returnFleet($fleet['fleet_id']);
@@ -484,14 +463,9 @@ class Expedition extends Missions
             );
 
             $this->expeditionMessage(
-                $fleet['fleet_owner'],
+                $fleet,
                 $message,
-                (int) $fleet['fleet_end_stay'],
-                [
-                    'galaxy' => $fleet['fleet_end_galaxy'],
-                    'system' => $fleet['fleet_end_system'],
-                    'planet' => $fleet['fleet_end_planet'],
-                ]
+                (int) $fleet['fleet_end_stay']
             );
 
             if (!empty($lostShips)) {
@@ -510,14 +484,9 @@ class Expedition extends Missions
             );
 
             $this->expeditionMessage(
-                $fleet['fleet_owner'],
+                $fleet,
                 $message,
-                (int) $fleet['fleet_end_stay'],
-                [
-                    'galaxy' => $fleet['fleet_end_galaxy'],
-                    'system' => $fleet['fleet_end_system'],
-                    'planet' => $fleet['fleet_end_planet'],
-                ]
+                (int) $fleet['fleet_end_stay']
             );
 
             $this->updateLostShipsAndDefensePoints(
@@ -542,14 +511,9 @@ class Expedition extends Missions
         );
 
         $this->expeditionMessage(
-            (int) $fleet['fleet_owner'],
+            $fleet,
             __('game/expedition.exp_delay_' . mt_rand(1, 5)),
-            (int) $fleet['fleet_end_stay'],
-            [
-                'galaxy' => $fleet['fleet_end_galaxy'],
-                'system' => $fleet['fleet_end_system'],
-                'planet' => $fleet['fleet_end_planet'],
-            ]
+            (int) $fleet['fleet_end_stay']
         );
 
         parent::returnFleet($fleet['fleet_id']);
@@ -568,14 +532,9 @@ class Expedition extends Missions
         );
 
         $this->expeditionMessage(
-            (int) $fleet['fleet_owner'],
+            $fleet,
             __('game/expedition.exp_early_' . mt_rand(1, 5)),
-            (int) $fleet['fleet_end_stay'],
-            [
-                'galaxy' => $fleet['fleet_end_galaxy'],
-                'system' => $fleet['fleet_end_system'],
-                'planet' => $fleet['fleet_end_planet'],
-            ]
+            (int) $fleet['fleet_end_stay']
         );
 
         parent::returnFleet($fleet['fleet_id']);
@@ -597,14 +556,9 @@ class Expedition extends Missions
 
         if ($lostChances == 1) {
             $this->expeditionMessage(
-                $fleet['fleet_owner'],
+                $fleet,
                 __('game/expedition.exp_lost_1'),
-                (int) $fleet['fleet_end_stay'],
-                [
-                    'galaxy' => $fleet['fleet_end_galaxy'],
-                    'system' => $fleet['fleet_end_system'],
-                    'planet' => $fleet['fleet_end_planet'],
-                ]
+                (int) $fleet['fleet_end_stay']
             );
 
             $this->updateLostShipsAndDefensePoints(
@@ -627,14 +581,9 @@ class Expedition extends Missions
 
             if (!$lostAll) {
                 $this->expeditionMessage(
-                    $fleet['fleet_owner'],
+                    $fleet,
                     __('game/expedition.exp_lost_1'),
-                    (int) $fleet['fleet_end_stay'],
-                    [
-                        'galaxy' => $fleet['fleet_end_galaxy'],
-                        'system' => $fleet['fleet_end_system'],
-                        'planet' => $fleet['fleet_end_planet'],
-                    ]
+                    (int) $fleet['fleet_end_stay']
                 );
 
                 $this->updateLostShipsAndDefensePoints($fleet['fleet_owner'], $lostShips);
@@ -644,14 +593,9 @@ class Expedition extends Missions
                 ]);
             } else {
                 $this->expeditionMessage(
-                    $fleet['fleet_owner'],
+                    $fleet,
                     __('game/expedition.exp_lost_1'),
-                    (int) $fleet['fleet_end_stay'],
-                    [
-                        'galaxy' => $fleet['fleet_end_galaxy'],
-                        'system' => $fleet['fleet_end_system'],
-                        'planet' => $fleet['fleet_end_planet'],
-                    ]
+                    (int) $fleet['fleet_end_stay']
                 );
 
                 $this->updateLostShipsAndDefensePoints(
@@ -667,14 +611,9 @@ class Expedition extends Missions
     private function resultPickedClean(array $fleet): void
     {
         $this->expeditionMessage(
-            $fleet['fleet_owner'],
+            $fleet,
             __('game/expedition.exp_picked_clean_' . mt_rand(1, 3)),
-            (int) $fleet['fleet_end_stay'],
-            [
-                'galaxy' => $fleet['fleet_end_galaxy'],
-                'system' => $fleet['fleet_end_system'],
-                'planet' => $fleet['fleet_end_planet'],
-            ]
+            (int) $fleet['fleet_end_stay']
         );
 
         parent::returnFleet($fleet['fleet_id']);
@@ -683,34 +622,75 @@ class Expedition extends Missions
     private function resultNothing(array $fleet): void
     {
         $this->expeditionMessage(
-            $fleet['fleet_owner'],
+            $fleet,
             __('game/expedition.exp_nothing_' . mt_rand(1, 6)),
-            (int) $fleet['fleet_end_stay'],
-            [
-                'galaxy' => $fleet['fleet_end_galaxy'],
-                'system' => $fleet['fleet_end_system'],
-                'planet' => $fleet['fleet_end_planet'],
-            ]
+            (int) $fleet['fleet_end_stay']
         );
 
         parent::returnFleet($fleet['fleet_id']);
     }
 
-    private function expeditionMessage(int $owner, string $message, int $time, array $coords): void
+    /**
+     * Every expedition message (probe report, result, fleet home) names the system it went to AND the
+     * planet it flew from: three fleets sent to one system used to read the same (Dale, 22 Nov 2026).
+     */
+    private function expeditionMessage(array $fleet, string $message, int $time): void
     {
         $subject = sprintf(
-            __('game/expedition.exp_report_title'),
-            $this->formatService->prettyCoords((int) $coords['galaxy'], (int) $coords['system'], (int) $coords['planet'])
+            __('game/expedition.exp_report_title_from'),
+            $this->formatService->prettyCoords(
+                (int) $fleet['fleet_end_galaxy'],
+                (int) $fleet['fleet_end_system'],
+                (int) $fleet['fleet_end_planet']
+            ),
+            $this->homeLabel($fleet)
         );
 
         Functions::sendMessage(
-            $owner,
+            (int) $fleet['fleet_owner'],
             0,
             $time,
             5,
             __('game/missions.mi_fleet_command'),
             $subject,
             $message
+        );
+    }
+
+    /** "Colony [1:6:7]": the planet (or moon) the fleet flew from; just the coords if it is gone. */
+    private function homeLabel(array $fleet): string
+    {
+        $coords = $this->formatService->prettyCoords(
+            (int) $fleet['fleet_start_galaxy'],
+            (int) $fleet['fleet_start_system'],
+            (int) $fleet['fleet_start_planet']
+        );
+        $name = trim((string) ($fleet['planet_start_name'] ?? ''));
+
+        if ((int) ($fleet['fleet_start_type'] ?? 1) === PlanetTypesEnumerator::MOON) {
+            $moon = __('game/global.moon');
+
+            if (mb_stripos($name, $moon) === false) {
+                $name = trim($name . ' (' . $moon . ')');
+            }
+        }
+
+        if ($name === '') {
+            return $coords;
+        }
+
+        return htmlspecialchars($name, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8', false) . ' ' . $coords;
+    }
+
+    /**
+     * "11.8 million Crystal" in the resource's colour (public/assets/css/resource-colours.css):
+     * metal orange, crystal light blue, deuterium green, dark matter purple (Dale, 22 Nov 2026).
+     */
+    private function resourceAmount(string $type, int $amount): string
+    {
+        return $this->formatService->spanClassElement(
+            $this->formatService->readableNumber($amount) . ' ' . __('game/global.' . $type),
+            'res-' . $type
         );
     }
 

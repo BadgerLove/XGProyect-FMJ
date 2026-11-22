@@ -113,6 +113,45 @@ class FormatService
         return number_format($n, 0, ',', '.');
     }
 
+    /**
+     * Big amounts in words for messages: below a million the full number (845.120), then one
+     * decimal and a word: 11.8 million, 2.3 billion, 4 trillion (Dale, 22 Nov 2026).
+     */
+    public function readableNumber(float | int $number): string
+    {
+        $abs = abs((float) $number);
+
+        if ($abs < 1e6) {
+            return $this->prettyNumber($number);
+        }
+
+        $units = [
+            [1e6, 'game/global.number_million'],
+            [1e9, 'game/global.number_billion'],
+            [1e12, 'game/global.number_trillion'],
+        ];
+
+        $index = 0;
+
+        foreach ($units as $i => [$size]) {
+            if ($abs >= $size) {
+                $index = $i;
+            }
+        }
+
+        $value = round($abs / $units[$index][0], 1);
+
+        // 999.96 million rounds to 1000: say 1 billion instead
+        if ($value >= 1000 && isset($units[$index + 1])) {
+            $index++;
+            $value = round($abs / $units[$index][0], 1);
+        }
+
+        $text = rtrim(rtrim(number_format($value, 1, '.', ''), '0'), '.');
+
+        return sprintf(__($units[$index][1]), ($number < 0 ? '-' : '') . $text);
+    }
+
     public function shortlyNumber(float | int $number): string
     {
         return match (true) {

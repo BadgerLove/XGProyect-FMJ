@@ -1,0 +1,27 @@
+/* Resource colours, so finds and deliveries can be told apart at a glance in messages
+   (Dale, 22 Nov 2026). Taken from the skin's own resource icons; deuterium is green because
+   its icon is white and would not stand out from the text. Used by the expedition finds
+   ("11.8 million Crystal collected.") and every "The fleet is delivering ..." line. */
+
+.res-metal,
+.res-crystal,
+.res-deuterium,
+.res-darkmatter {
+    font-weight: bold;
+}
+
+.res-metal {
+    color: #ef8a4a;
+}
+
+.res-crystal {
+    color: #6cc8ff;
+}
+
+.res-deuterium {
+    color: #5fe3a1;
+}
+
+.res-darkmatter {
+    color: #c99bff;
+}

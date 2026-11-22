@@ -10,6 +10,7 @@
         <link rel="stylesheet" type="text/css" href="{{ asset('assets/css/formate.css') }}">
         <link rel="stylesheet" type="text/css" href="{{ asset('assets/upload/skins/xgproyect/formate.css') }}">
         <link rel="stylesheet" type="text/css" href="{{ asset('assets/css/mobile.css') }}?v=7">
+        <link rel="stylesheet" type="text/css" href="{{ asset('assets/css/resource-colours.css') }}?v=1">
         <meta http-equiv="Content-Type" content="text/html;charset=UTF-8">
         <meta name="csrf-token" content="{{ csrf_token() }}">
         <meta name="generator" content="XG Proyect {{ config('version.files') }}" />

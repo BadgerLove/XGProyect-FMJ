@@ -10,6 +10,9 @@ return [
     'crystal' => 'Crystal',
     'deuterium' => 'Deuterium',
     'darkmatter' => 'Dark Matter',
+    'number_million' => '%s million',
+    'number_billion' => '%s billion',
+    'number_trillion' => '%s trillion',
     'energy' => 'Energy',
 
     // types of planets or galaxy objects

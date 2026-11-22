@@ -21,7 +21,7 @@ return [
     // fleet missions
     'mi_fleet_back_title' => 'Retorno de una flota', // ok
     'mi_fleet_back_without_resources' => 'Tu flota vuelve del planeta %s %s al planeta %s %s.<br><br>La flota no trae recursos.', // ok
-    'mi_fleet_back_with_resources' => 'Tu flota vuelve del planeta %s %s al planeta %s %s.<br><br>La flota entrega %s Metal, %s Cristal y %s Deuterio.',
+    'mi_fleet_back_with_resources' => 'Tu flota vuelve del planeta %s %s al planeta %s %s.<br><br>La flota entrega <span class="res-metal">%s Metal</span>, <span class="res-crystal">%s Cristal</span> y <span class="res-deuterium">%s Deuterio</span>.',
     'mi_fleet_command' => 'Ordenes de la flota', // ok
     'mi_planet_coordinates' => '[%s:%s:%s]',
 ];

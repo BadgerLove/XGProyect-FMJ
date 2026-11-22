@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 return [
     'exp_report_title' => 'Expedition Result %s', // ok
+    'exp_report_title_from' => 'Expedition Result %s from %s', // 22 Nov 2026: second %s = home planet name + coords
 
     // found new ships
     'exp_new_ships_1' => 'Our expedition found a planet which was almost destroyed during a certain chain of wars. There are different ships floating around in the orbit. The technicians are trying to repair some of them. Maybe we will also get information about what happened here.<br><br>The following ships are now part of the fleet:<br>%s', // ok
@@ -15,10 +16,12 @@ return [
     'exp_new_ships_7' => 'We found the remains of an armada. The technicians directly went to the almost intact ships to try to get them to work again.<br><br>The following ships are now part of the fleet:<br>%s', // ok
 
     // found resources
-    'exp_new_resources_1' => 'On an isolated planetoid we found some easily accessible resources fields and harvested some successfully.<br><br>%s %s have been captured.', // ok
-    'exp_new_resources_2' => 'Your expedition discovered a small asteroid from which some resources could be harvested.<br><br>%s %s have been captured.', // ok
-    'exp_new_resources_3' => 'Your expedition found an ancient, fully loaded but deserted freighter convoy. Some of the resources could be rescued.<br><br>%s %s have been captured.', // ok
-    'exp_new_resources_4' => 'On a tiny moon with its own atmosphere your expedition found some huge raw resources storage. The crew on the ground is trying to lift and load that natural treasure.<br><br>%s %s have been captured.', // ok
+    'exp_new_resources_1' => 'On an isolated planetoid we found some easily accessible resources fields and harvested some successfully.<br><br>%s collected.', // ok
+    'exp_new_resources_2' => 'Your expedition discovered a small asteroid from which some resources could be harvested.<br><br>%s collected.', // ok
+    'exp_new_resources_3' => 'Your expedition found an ancient, fully loaded but deserted freighter convoy. Some of the resources could be rescued.<br><br>%s collected.', // ok
+    'exp_new_resources_4' => 'On a tiny moon with its own atmosphere your expedition found some huge raw resources storage. The crew on the ground is trying to lift and load that natural treasure.<br><br>%s collected.', // ok
+
+    'exp_holds_full' => 'The cargo holds were full, so some had to be left behind.',
 
     // found primitive enemy
     'exp_primitive_enemy_1' => 'Some primitive barbarians are attacking us with spaceships that can\'t even be named as such. If the fire gets serious we will be forced to fire back.', // ok
@@ -37,11 +40,11 @@ return [
     'exp_trader' => 'Your expedition fleet made contact with a friendly alien race. They announced that they would send a representative with goods to trade to your worlds.', // ok
 
     // found dark matter
-    'exp_dm_1' => 'The expedition followed some odd signals to an asteroid. In the asteroids core a small amount of Dark Matter was found. The asteroid was taken and the explorers are attempting to extract the Dark Matter.<br><br>Dark Matter %s have been captured.', // ok
-    'exp_dm_2' => 'Our expedition took over a ghost ship which was transporting a small amount of Dark Matter. We didn\'t find any hints of what happened to the original crew of the ship, but our technicians where able to rescue the Dark Matter.<br><br>Dark Matter %s have been captured.', // ok
-    'exp_dm_3' => 'We found the remains of an alien ship. We found a little container with some Dark Matter on a shelf in the Cargo hold!.<br><br>Dark Matter %s have been captured.', // ok
-    'exp_dm_4' => 'We met an odd alien on the shelf of a small ship who gave us a case with Dark Matter in exchange for some simple mathematical calculations.<br><br>Dark Matter %s have been captured.', // ok
-    'exp_dm_5' => 'The expedition was able to capture and store some Dark Matter.<br><br>Dark Matter %s have been captured.', // ok
+    'exp_dm_1' => 'The expedition followed some odd signals to an asteroid. In the asteroids core a small amount of Dark Matter was found. The asteroid was taken and the explorers are attempting to extract the Dark Matter.<br><br>%s collected.', // ok
+    'exp_dm_2' => 'Our expedition took over a ghost ship which was transporting a small amount of Dark Matter. We didn\'t find any hints of what happened to the original crew of the ship, but our technicians where able to rescue the Dark Matter.<br><br>%s collected.', // ok
+    'exp_dm_3' => 'We found the remains of an alien ship. We found a little container with some Dark Matter on a shelf in the Cargo hold!.<br><br>%s collected.', // ok
+    'exp_dm_4' => 'We met an odd alien on the shelf of a small ship who gave us a case with Dark Matter in exchange for some simple mathematical calculations.<br><br>%s collected.', // ok
+    'exp_dm_5' => 'The expedition was able to capture and store some Dark Matter.<br><br>%s collected.', // ok
 
     // delay
     'exp_delay_1' => 'Your expedition went into a sector full of particle storms. This set the energy stores to overload and most of the ships main systems crashed. Your mechanics where able to avoid the worst, but the expedition is going to return with a big delay.', // ok

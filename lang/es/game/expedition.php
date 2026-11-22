@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 return [
     'exp_report_title' => 'Resultado de la expedición %s', // ok
+    'exp_report_title_from' => 'Resultado de la expedición %s desde %s',
 
     // found new ships
     'exp_new_ships_1' => 'Nuestra expedición encontró un planeta que estuvo cerca de ser completamente destruido en continuas guerras. Hay naves diversas flotando alrededor de la órbita. Los técnicos intenta reparar algunas de ellas. Quizá con ello también obtengamos información de lo que paso aquí.<br><br>Las siguientes naves son ahora parte de la flota:<br>%s', // ok
@@ -15,10 +16,12 @@ return [
     'exp_new_ships_7' => '',
 
     // found resources
-    'exp_new_resources_1' => 'En un planetoide abondonado han sido encontradas algunas zonas de recursos fácilmente accesibles y se han recolectado allí algunos recursos satisfactoriamente.<br><br>Se ha capturado %s de %s.', // ok
-    'exp_new_resources_2' => 'Tu expedición descubrió un pequeño asteroide en el cual se pueden reciclar algunos recursos.<br><br>Se ha capturado %s de %s.', // ok
+    'exp_new_resources_1' => 'En un planetoide abondonado han sido encontradas algunas zonas de recursos fácilmente accesibles y se han recolectado allí algunos recursos satisfactoriamente.<br><br>Se ha obtenido: %s.', // ok
+    'exp_new_resources_2' => 'Tu expedición descubrió un pequeño asteroide en el cual se pueden reciclar algunos recursos.<br><br>Se ha obtenido: %s.', // ok
     'exp_new_resources_3' => '',
     'exp_new_resources_4' => '',
+
+    'exp_holds_full' => 'Las bodegas de carga estaban llenas: hubo que dejar parte atrás.',
 
     // found primitive enemy
     'exp_primitive_enemy_1' => 'Algunos bárbaros primitivos están atacándonos con naves espaciales que no deberían ser llamadas como tal. Si nos disparan en serio, nos veremos forzados a devolver el fuego.', // ok
@@ -38,7 +41,7 @@ return [
     'exp_trader' => 'Tu flota en expedición tuvo un corto contacto con una raza de aliens un poco vergonzosa. Estos anunciaron que van a enviar a un representante con bienes de comercio a tus mundos.', // ok
 
     // found dark matter
-    'exp_dm_1' => 'La expedición siguió algunas señales fuera de lo común y descrubrió un asteroide. En el núcle del asteroide se encontraba una pequeña cantidad de Materia Oscura. El asteroide fue transportado a bordo y los exploradores intentan extrar la Materia Oscura.<br><br>Se ha capturado %s de %s.', // ok
+    'exp_dm_1' => 'La expedición siguió algunas señales fuera de lo común y descrubrió un asteroide. En el núcle del asteroide se encontraba una pequeña cantidad de Materia Oscura. El asteroide fue transportado a bordo y los exploradores intentan extrar la Materia Oscura.<br><br>Se ha obtenido: %s.', // ok
     'exp_dm_2' => '',
     'exp_dm_3' => '',
     'exp_dm_4' => '',
